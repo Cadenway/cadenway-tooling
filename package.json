@@ -1,0 +1,28 @@
+{
+  "name": "cadenway-tooling",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "UNLICENSED",
+  "packageManager": "pnpm@12.18.0",
+  "engines": {
+    "node": "^24.15.0"
+  },
+  "scripts": {
+    "format:check": "prettier --check .",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "pnpm -r run build",
+    "test:architecture": "pnpm build && node --test tests/architecture/*.spec.mjs && vitest run packages/nest-testing/src/architecture.spec.ts",
+    "quality": "pnpm format:check && pnpm typecheck && pnpm test:architecture",
+    "release": "pnpm build && changeset publish",
+    "changeset": "changeset"
+  },
+  "devDependencies": {
+    "@cadenway/angular-testing": "workspace:*",
+    "@changesets/cli": "^3.0.3",
+    "@types/node": "catalog:",
+    "prettier": "^3.9.10",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

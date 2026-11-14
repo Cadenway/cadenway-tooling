@@ -1,0 +1,67 @@
+{
+  "name": "@cadenway/nest-testing",
+  "version": "0.0.1",
+  "description": "Test helpers for the Cadenway NestJS services and gateways.",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Cadenway/cadenway-tooling.git",
+    "directory": "packages/nest-testing"
+  },
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./architecture": {
+      "types": "./dist/architecture.d.ts",
+      "default": "./dist/architecture.js"
+    }
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.tsbuildinfo"
+  ],
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "@testcontainers/nats": "^12.2.1",
+    "@testcontainers/postgresql": "^12.2.1",
+    "@testcontainers/redis": "^12.2.1",
+    "msw": "^3.0.5",
+    "testcontainers": "^12.2.1",
+    "typescript": "catalog:"
+  },
+  "peerDependencies": {
+    "@cadenway/nest-messaging": "^0.0.1",
+    "@nestjs/testing": "catalog:",
+    "drizzle-orm": "catalog:",
+    "pg": "catalog:",
+    "supertest": "catalog:",
+    "vitest": "catalog:"
+  },
+  "peerDependenciesMeta": {
+    "@cadenway/nest-messaging": {
+      "optional": true
+    },
+    "drizzle-orm": {
+      "optional": true
+    },
+    "pg": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@nestjs/testing": "catalog:",
+    "@types/node": "catalog:",
+    "drizzle-orm": "catalog:",
+    "pg": "catalog:",
+    "supertest": "catalog:",
+    "vitest": "catalog:"
+  }
+}
