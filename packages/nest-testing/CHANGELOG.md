@@ -1,5 +1,11 @@
 # @cadenway/nest-testing
 
+## 0.1.0
+
+### Minor Changes
+
+- bed8c45: Add an architecture verifier for NestJS services, gateways, and the shared service kit.
+
 ## 0.0.1
 
 ### Patch Changes
