@@ -65,12 +65,34 @@ interface SampleConfig extends BaseConfig, DatabaseConfig, InternalTokenVerifier
    * Property NATS_URL
    *
    * @description
-   * Address of the NATS server, the only NATS variable a deployed service receives.
+   * Address of the NATS server.
    *
    * @type {string}
    * @readonly
    */
   readonly NATS_URL: string;
+
+  /**
+   * Property NATS_USER
+   *
+   * @description
+   * NATS user of the service, as cadenway-ops names it.
+   *
+   * @type {string}
+   * @readonly
+   */
+  readonly NATS_USER: string;
+
+  /**
+   * Property NATS_PASSWORD
+   *
+   * @description
+   * Password of that user.
+   *
+   * @type {string}
+   * @readonly
+   */
+  readonly NATS_PASSWORD: string;
 
   /**
    * Property MIGRATION_DATABASE_URL
@@ -151,7 +173,13 @@ class EventRelay implements OnModuleInit, OnModuleDestroy {
    * @returns {Promise<void>} Resolves once connected.
    */
   public async onModuleInit(): Promise<void> {
-    this.connection = await connect({ servers: this.config.NATS_URL });
+    // As @cadenway/nest-messaging will: the broker only lets a user read its own inbox prefix.
+    this.connection = await connect({
+      servers: this.config.NATS_URL,
+      user: this.config.NATS_USER,
+      pass: this.config.NATS_PASSWORD,
+      inboxPrefix: `_INBOX.${this.config.NATS_USER}`,
+    });
   }
 
   /**
@@ -288,6 +316,8 @@ async function createSampleService(): Promise<NestExpressApplication> {
       ...databaseConfigShape,
       ...internalTokenVerifierConfigShape,
       NATS_URL: z.string(),
+      NATS_USER: z.string(),
+      NATS_PASSWORD: z.string(),
       MIGRATION_DATABASE_URL: z.url(),
       CHAT_WEBHOOK_URL: z.url(),
     }),
@@ -415,10 +445,35 @@ describe('createTestApp for a service', () => {
       DATABASE_URL: testApp.database.appUrl,
       MIGRATION_DATABASE_URL: testApp.database.migratorUrl,
       NATS_URL: testApp.nats.url,
+      NATS_USER: 'task',
+      NATS_PASSWORD: testApp.nats.user.password,
       INTERNAL_TOKEN_AUDIENCE: 'task-service',
       CHAT_WEBHOOK_URL: 'https://hooks.chat.test/notify',
     });
     expect(testApp.env.REDIS_URL).toBeUndefined();
+  });
+
+  it('gives the service the NATS user of its backend, held to its own subjects', async () => {
+    const service: NatsConnection = await connect({
+      servers: testApp.env.NATS_URL ?? '',
+      user: testApp.env.NATS_USER ?? '',
+      pass: testApp.env.NATS_PASSWORD ?? '',
+      inboxPrefix: '_INBOX.task',
+    });
+    try {
+      await expect(
+        jetstream(service, { timeout: 2000 }).publish(
+          'evt.member.removed.v1',
+          JSON.stringify({ id: 'evt-member-removed' }),
+          { msgID: 'evt-member-removed' },
+        ),
+      ).rejects.toThrow(/Permissions Violation for Publish to "evt\.member\.removed\.v1"/u);
+    } finally {
+      await service.close();
+    }
+
+    await testApp.events.sync();
+    expect(testApp.events.named('member.removed.v1')).toEqual([]);
   });
 
   it('runs the application as the application role of the service', async () => {
@@ -584,6 +639,7 @@ describe('createTestApp for a service', () => {
 
     expect(process.env.DATABASE_URL).toBe(before);
     expect(process.env.INTERNAL_TOKEN_AUDIENCE).toBeUndefined();
+    expect(process.env.NATS_PASSWORD).toBeUndefined();
     const client: InstanceType<typeof pg.Client> = new pg.Client({
       connectionString: appUrl,
       connectionTimeoutMillis: 3000,
@@ -677,6 +733,16 @@ describe('createTestApp when a step fails', () => {
     },
     CONTAINER_START_TIMEOUT_MS,
   );
+
+  it('refuses a service whose NATS grant is unknown, before starting anything', async () => {
+    await expect(
+      createTestApp({
+        service: 'reporting-service',
+        postgres: false,
+        create: (): Promise<never> => Promise.reject(new Error('never called')),
+      }),
+    ).rejects.toThrow('No NATS grant is known for the user "reporting"');
+  });
 
   it('refuses migrations without PostgreSQL before creating the application', async () => {
     await expect(

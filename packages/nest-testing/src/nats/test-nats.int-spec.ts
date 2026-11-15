@@ -1,11 +1,38 @@
-import { jetstreamManager, type JetStreamManager, type StreamInfo } from '@nats-io/jetstream';
+import {
+  jetstream,
+  jetstreamManager,
+  type JetStreamManager,
+  type StreamInfo,
+} from '@nats-io/jetstream';
 import { connect, type NatsConnection } from '@nats-io/transport-node';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { fixtures } from '../fixtures/fixtures.js';
 import { startHttpFakes, type HttpFakes } from '../http/http-fakes.js';
 import type { EventRecorder, RecordedEvent } from './event-recorder.js';
+import type { TestNatsCredentials } from './nats-users.js';
 import { startTestNats, type TestNats } from './test-nats.js';
+
+/**
+ * Function connectAs
+ *
+ * @description
+ * Connects to the disposable server as one of its users, on that user's inbox prefix, as
+ * `@cadenway/nest-messaging` connects a service.
+ *
+ * @param {TestNats} nats - The server.
+ * @param {TestNatsCredentials} credentials - User to connect as.
+ * @returns {Promise<NatsConnection>} The connection.
+ */
+function connectAs(nats: TestNats, credentials: TestNatsCredentials): Promise<NatsConnection> {
+  return connect({
+    servers: nats.url,
+    user: credentials.user,
+    pass: credentials.password,
+    inboxPrefix: credentials.inboxPrefix,
+    timeout: 5000,
+  });
+}
 
 /**
  * Interface StatusChanged
@@ -83,10 +110,12 @@ describe('startTestNats', () => {
   let manager: JetStreamManager;
 
   beforeAll(async () => {
-    nats = await startTestNats({ streams: [{ name: 'EVENTS_DLQ', subjects: ['dlq.>'] }] });
+    nats = await startTestNats({
+      user: { name: 'task' },
+      streams: [{ name: 'AUDIT', subjects: ['audit.>'] }],
+    });
     recorder = await nats.recordEvents();
-    // NATS_URL alone, as a deployed service connects: the server asks for no credentials.
-    connection = await connect({ servers: nats.url });
+    connection = await connectAs(nats, nats.admin);
     manager = await jetstreamManager(connection);
   });
 
@@ -99,19 +128,110 @@ describe('startTestNats', () => {
     await nats.stop();
   });
 
-  it('switches JetStream on and creates the EVENTS stream on evt.>', async () => {
-    const info: StreamInfo = await manager.streams.info('EVENTS');
+  it('creates EVENTS, EVENTS_RESTRICTED and EVENTS_DLQ as cadenway-ops declares them', async () => {
+    const day: number = 24 * 60 * 60 * 1e9;
+    const mib: number = 1024 * 1024;
+    const declared: { name: string; subjects: string[]; days: number; bytes: number }[] = [
+      { name: 'EVENTS', subjects: ['evt.>'], days: 7, bytes: 1024 * mib },
+      { name: 'EVENTS_RESTRICTED', subjects: ['restricted.>'], days: 7, bytes: 64 * mib },
+      { name: 'EVENTS_DLQ', subjects: ['dlq.>'], days: 30, bytes: 256 * mib },
+    ];
 
-    expect(info.config.subjects).toEqual(['evt.>']);
-    expect(info.config.storage).toBe('file');
-    // Seven days, in nanoseconds.
-    expect(info.config.max_age).toBe(7 * 24 * 60 * 60 * 1e9);
+    for (const stream of declared) {
+      const info: StreamInfo = await manager.streams.info(stream.name);
+      expect(info.config).toMatchObject({
+        subjects: stream.subjects,
+        storage: 'file',
+        retention: 'limits',
+        discard: 'old',
+        num_replicas: 1,
+        max_age: stream.days * day,
+        max_bytes: stream.bytes,
+        // Two minutes, in nanoseconds: the window the publishers rely on.
+        duplicate_window: 120 * 1e9,
+      });
+    }
   });
 
   it('creates the further streams it is asked for', async () => {
-    const info: StreamInfo = await manager.streams.info('EVENTS_DLQ');
+    const info: StreamInfo = await manager.streams.info('AUDIT');
 
-    expect(info.config.subjects).toEqual(['dlq.>']);
+    expect(info.config.subjects).toEqual(['audit.>']);
+  });
+
+  it('refuses a client without credentials', async () => {
+    await expect(connect({ servers: nats.url, timeout: 2000 })).rejects.toThrow(
+      /Authorization Violation/iu,
+    );
+  });
+
+  it('lets the service user publish the events of its entities, which the recorder reads', async () => {
+    const service: NatsConnection = await connectAs(nats, nats.user);
+    try {
+      await jetstream(service).publish(
+        'evt.task.status-changed.v1',
+        JSON.stringify(statusChanged('evt-70', 'CAD-482', 'review')),
+        { msgID: 'evt-70' },
+      );
+    } finally {
+      await service.close();
+    }
+
+    const event: RecordedEvent<StatusChanged> =
+      await recorder.waitFor<StatusChanged>('task.status-changed.v1');
+    expect(event.headers['Nats-Msg-Id']).toBe('evt-70');
+    expect(nats.user).toMatchObject({ user: 'task', inboxPrefix: '_INBOX.task' });
+  });
+
+  it('refuses the service user the subject of another backend', async () => {
+    const service: NatsConnection = await connectAs(nats, nats.user);
+    try {
+      await expect(
+        jetstream(service, { timeout: 2000 }).publish(
+          'evt.organization.deleted.v1',
+          JSON.stringify({ id: 'evt-71' }),
+          { msgID: 'evt-71' },
+        ),
+      ).rejects.toThrow(/Permissions Violation for Publish to "evt\.organization\.deleted\.v1"/u);
+    } finally {
+      await service.close();
+    }
+
+    await recorder.sync();
+    expect(recorder.named('organization.deleted.v1')).toEqual([]);
+  });
+
+  it('refuses the service user a client left on the default inbox prefix', async () => {
+    const careless: NatsConnection = await connect({
+      servers: nats.url,
+      user: nats.user.user,
+      pass: nats.user.password,
+      timeout: 2000,
+    });
+    try {
+      await expect(jetstreamManager(careless, { timeout: 2000 })).rejects.toThrow(
+        /Permissions Violation for Subscription to "_INBOX\./u,
+      );
+    } finally {
+      await careless.close();
+    }
+  });
+
+  it('leaves the streams to the admin user', async () => {
+    const service: NatsConnection = await connectAs(nats, nats.user);
+    try {
+      const serviceManager: JetStreamManager = await jetstreamManager(service, { timeout: 2000 });
+      await expect(serviceManager.streams.delete('EVENTS')).rejects.toThrow(
+        /Permissions Violation/u,
+      );
+      await expect(
+        serviceManager.streams.add({ name: 'ROGUE', subjects: ['rogue.>'] }),
+      ).rejects.toThrow(/Permissions Violation/u);
+    } finally {
+      await service.close();
+    }
+
+    expect((await manager.streams.info('EVENTS')).config.name).toBe('EVENTS');
   });
 
   it('records what is published, in order, with payload and headers', async () => {
@@ -218,7 +338,7 @@ describe('startTestNats', () => {
     // for the server to speak first. Without tcpAddresses this connection times out.
     const fakes: HttpFakes = startHttpFakes([], { tcpAddresses: [nats.url] });
     try {
-      const during: NatsConnection = await connect({ servers: nats.url, timeout: 5000 });
+      const during: NatsConnection = await connectAs(nats, nats.user);
       await during.flush();
       await during.close();
     } finally {
@@ -242,6 +362,21 @@ describe('TestNats.stop', () => {
     await nats.stop();
 
     await expect(recorder.sync(500)).rejects.toThrow();
-    await expect(connect({ servers: nats.url, timeout: 2000 })).rejects.toThrow();
+    await expect(
+      connect({
+        servers: nats.url,
+        user: nats.admin.user,
+        pass: nats.admin.password,
+        timeout: 2000,
+      }),
+    ).rejects.toThrow();
+    // Started without a user: only the admin user exists, and asking for the other one says so.
+    expect(() => nats.user).toThrow('No NATS user');
+  });
+
+  it('refuses a user that is not a Cadenway backend, before starting anything', async () => {
+    await expect(startTestNats({ user: { name: 'reporting' } })).rejects.toThrow(
+      'No NATS grant is known for the user "reporting"',
+    );
   });
 });

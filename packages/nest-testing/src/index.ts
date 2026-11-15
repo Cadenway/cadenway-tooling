@@ -59,6 +59,14 @@ export {
   type WaitForEventOptions,
 } from './nats/event-recorder.js';
 export {
+  type NatsPermissions,
+  type TestNatsCredentials,
+  type TestNatsGrant,
+  type TestNatsUser,
+} from './nats/nats-users.js';
+export {
+  EVENTS_DLQ_STREAM,
+  EVENTS_RESTRICTED_STREAM,
   EVENTS_STREAM,
   EVENTS_SUBJECTS,
   startTestNats,

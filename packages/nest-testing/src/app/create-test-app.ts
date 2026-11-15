@@ -3,6 +3,7 @@ import type { AnyHandler } from 'msw';
 import { createTestInternalTokens, type TestInternalTokens } from '../auth/internal-tokens.js';
 import { startHttpFakes, type HttpFakes } from '../http/http-fakes.js';
 import type { EventRecorder } from '../nats/event-recorder.js';
+import { grantOf, natsUserNameOf, type TestNatsUser } from '../nats/nats-users.js';
 import { startTestNats, type TestNats, type TestStream } from '../nats/test-nats.js';
 import { startTestDatabase, type TestDatabase } from '../postgres/test-database.js';
 import { startTestRedis, type TestRedis } from '../redis/test-redis.js';
@@ -231,10 +232,24 @@ export interface CreateTestAppOptions<TApp extends TestApplication> {
   readonly migrate?: (database: TestDatabase) => Promise<void>;
 
   /**
+   * Property natsUser
+   *
+   * @description
+   * NATS user of the application. Defaults to the user cadenway-ops gives the service, named
+   * after it (`task-service` gives `task`), with the permissions of that backend: it publishes
+   * the events of its own entities only, and its client must use the inbox prefix
+   * `_INBOX.<user>`. A name that is not a Cadenway backend needs a `grant`.
+   *
+   * @type {TestNatsUser | undefined}
+   * @readonly
+   */
+  readonly natsUser?: TestNatsUser;
+
+  /**
    * Property streams
    *
    * @description
-   * JetStream streams to create besides `EVENTS`.
+   * JetStream streams to create besides `EVENTS`, `EVENTS_RESTRICTED` and `EVENTS_DLQ`.
    *
    * @type {readonly TestStream[] | undefined}
    * @readonly
@@ -411,13 +426,14 @@ function applyEnvironment(env: TestEnvironment): () => void {
  * Starts the disposable dependencies of a service or gateway, applies its migrations, then
  * builds and initializes the application:
  *
- * 1. PostgreSQL with the migrator and application roles, NATS with JetStream and the `EVENTS`
- *    stream, and Redis when asked, each in its own container;
+ * 1. PostgreSQL with the migrator and application roles, NATS with JetStream, the user of the
+ *    application and the streams of cadenway-ops, and Redis when asked, each in its own
+ *    container;
  * 2. the migrations, as the migrator role;
- * 3. an event recorder on the stream and the third-party fakes;
+ * 3. an event recorder on `EVENTS`, as the NATS `admin` user, and the third-party fakes;
  * 4. the environment (`DATABASE_URL` of the application role, `MIGRATION_DATABASE_URL` of the
- *    migrator, `NATS_URL`, `REDIS_URL`, the internal token variables, `NODE_ENV`, `LOG_LEVEL`,
- *    `PORT`) on `process.env`;
+ *    migrator, `NATS_URL`, `NATS_USER`, `NATS_PASSWORD`, `REDIS_URL`, the internal token
+ *    variables, `NODE_ENV`, `LOG_LEVEL`, `PORT`) on `process.env`;
  * 5. the application, through `create`, then `init`.
  *
  * Nothing starts before the call. When a step fails, what already started is stopped and the
@@ -445,6 +461,11 @@ export async function createTestApp<TApp extends TestApplication>(
       audience: options.service,
       ...(options.issuers === undefined ? {} : { issuers: options.issuers }),
     });
+    const natsUser: TestNatsUser = options.natsUser ?? { name: natsUserNameOf(options.service) };
+    if (options.nats !== false) {
+      // An unknown backend without a grant fails here, before any container starts.
+      grantOf(natsUser);
+    }
     const started: [
       PromiseSettledResult<TestDatabase | undefined>,
       PromiseSettledResult<TestNats | undefined>,
@@ -453,7 +474,10 @@ export async function createTestApp<TApp extends TestApplication>(
       options.postgres === false ? undefined : startTestDatabase({ service: options.service }),
       options.nats === false
         ? undefined
-        : startTestNats(options.streams === undefined ? {} : { streams: options.streams }),
+        : startTestNats({
+            user: natsUser,
+            ...(options.streams === undefined ? {} : { streams: options.streams }),
+          }),
       options.redis === true ? startTestRedis() : undefined,
     ]);
     for (const result of started) {
@@ -500,7 +524,9 @@ export async function createTestApp<TApp extends TestApplication>(
       ...(database === undefined
         ? {}
         : { DATABASE_URL: database.appUrl, MIGRATION_DATABASE_URL: database.migratorUrl }),
-      ...(nats === undefined ? {} : { NATS_URL: nats.url }),
+      ...(nats === undefined
+        ? {}
+        : { NATS_URL: nats.url, NATS_USER: nats.user.user, NATS_PASSWORD: nats.user.password }),
       ...(redis === undefined ? {} : { REDIS_URL: redis.url }),
     };
     const infrastructure: TestInfrastructure = {

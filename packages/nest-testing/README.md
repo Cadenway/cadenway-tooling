@@ -100,10 +100,10 @@ it('publishes the status change of CAD-482', async () => {
 
 In order, `createTestApp`:
 
-1. starts PostgreSQL with the two roles of the service, NATS with JetStream and the `EVENTS`
-   stream, and Redis when asked, each in its own container;
+1. starts PostgreSQL with the two roles of the service, NATS with JetStream, the NATS user of the
+   service and the streams of `cadenway-ops`, and Redis when asked, each in its own container;
 2. applies the migrations as the migrator role, then `migrate` when given;
-3. starts an event recorder on `EVENTS` and the third-party fakes;
+3. starts an event recorder on `EVENTS`, as the NATS `admin` user, and the third-party fakes;
 4. sets the environment on `process.env`;
 5. calls `create`, then `init` on what it returns. The application never listens: call it through
    `app.getHttpServer()`.
@@ -121,7 +121,8 @@ is thrown. `close` closes the application, stops the recorder and the fakes, res
 | `postgres`         | `true`            | `false` for a gateway                                                                  |
 | `nats`             | `true`            | `false` when the application neither publishes nor consumes                            |
 | `redis`            | `false`           | `true` for a gateway                                                                   |
-| `streams`          | None              | JetStream streams to create besides `EVENTS`, such as `EVENTS_DLQ`                     |
+| `natsUser`         | From `service`    | NATS user of the application: `{ name, grant }` (see [NATS users](#nats-users))        |
+| `streams`          | None              | JetStream streams to create besides `EVENTS`, `EVENTS_RESTRICTED` and `EVENTS_DLQ`     |
 | `issuers`          | `['api-gateway']` | Services allowed to call the one under test; tokens are signed by the first            |
 | `env`              | None              | Further variables, or a function of the started dependencies; they win over the below  |
 | `http`             | None              | Initial `msw` handlers of the third-party fakes                                        |
@@ -131,7 +132,7 @@ is thrown. `close` closes the application, stops the recorder and the fakes, res
 | ----------------------------------------------------------- | --------------------------------------------------------------------- |
 | `DATABASE_URL`                                              | The application role `<database>_app`                                 |
 | `MIGRATION_DATABASE_URL`                                    | The migrator role `<database>_migrator`, which `src/migrate.ts` reads |
-| `NATS_URL`                                                  | The disposable NATS; like the deployed one, it asks for no credential |
+| `NATS_URL`, `NATS_USER`, `NATS_PASSWORD`                    | The disposable NATS and the user of the service (`task`)              |
 | `REDIS_URL`                                                 | The disposable Redis, with `redis: true`                              |
 | `INTERNAL_TOKEN_AUDIENCE`, `INTERNAL_TOKEN_TRUSTED_ISSUERS` | The service name and the verification keys of the test issuers        |
 | `NODE_ENV`, `LOG_LEVEL`, `PORT`                             | `test`, `silent`, `3000`                                              |
@@ -189,7 +190,8 @@ column whose row-level security is not enabled, not forced, or has no policy.
 
 ### Events
 
-`testApp.events` reads the `EVENTS` stream from its first message, straight from JetStream.
+`testApp.events` reads the `EVENTS` stream from its first message, straight from JetStream, as the
+`admin` user: it sees every event the service published with its own user.
 
 | Member                                | Does                                                                                                              |
 | ------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
@@ -199,9 +201,49 @@ column whose row-level security is not enabled, not forced, or has no policy.
 | `clear()`                             | Forgets the recorded events, including those published and not read yet                                           |
 
 `testApp.nats.publish(name, payload, { messageId, headers })` publishes on `evt.<name>` as another
-service would, with `Nats-Msg-Id` taken from the `id` of the payload unless `messageId` is given,
-to feed a handler. `startTestNats({ streams })` runs the server on its own, with the command of
-`cadenway-ops`; `EVENTS_STREAM` and `EVENTS_SUBJECTS` name the stream.
+service would, as the `admin` user, with `Nats-Msg-Id` taken from the `id` of the payload unless
+`messageId` is given, to feed a handler.
+
+### NATS users
+
+The disposable broker authenticates as the deployed one does
+([`docs/messaging.md`](https://github.com/Cadenway/cadenway-ops/blob/main/docs/messaging.md) of
+`cadenway-ops`): no anonymous client, an `admin` user that creates the streams and that the
+recorder reads with, and the user of the service under test. Passwords are generated for each run.
+
+The user is named after the service (`task-service` gives `task`, `api-gateway` stays
+`api-gateway`) and gets what `cadenway-ops` grants that backend:
+
+- it publishes `evt.<entity>.>` and `rebuild.*.<entity>` for the entities it owns only: the task
+  user publishing `evt.member.removed.v1` gets `Permissions Violation for Publish`;
+- it reads the streams it consumes through JetStream consumers, and can neither create, change nor
+  delete a stream;
+- its client must use the inbox prefix `_INBOX.<user>` (`testApp.nats.user.inboxPrefix`): a client
+  left on the default `_INBOX.>` is refused its first request.
+
+| Backend                     | Entities it publishes                                            | Consumes                      |
+| --------------------------- | ---------------------------------------------------------------- | ----------------------------- |
+| `identity`                  | `user`, `session`, `api-token`, and `restricted.>`               | `EVENTS`                      |
+| `organization`              | `organization`, `member`, `domain`                               | `EVENTS`                      |
+| `billing`                   | `subscription`, `quota`, `invoice`                               | `EVENTS`                      |
+| `task`                      | `space`, `list`, `task`, `comment`, `approval`, `milestone`      | `EVENTS`                      |
+| `document`, `storage`       | `doc`; `file`                                                    | `EVENTS`                      |
+| `notification`              | `notification`, `reminder`, and `dlq.>` (the dead-letter worker) | `EVENTS`, `EVENTS_RESTRICTED` |
+| `automation`, `integration` | `automation`; `git`                                              | `EVENTS`                      |
+| `search`                    | nothing                                                          | `EVENTS`                      |
+| `api-gateway`               | `api-usage`, without rebuilds                                    | nothing                       |
+| `realtime-gateway`          | nothing                                                          | `EVENTS`                      |
+
+Another user passes its grant: `natsUser: { name: 'reporting', grant: { entities: ['report'] } }`
+(`consumes` defaults to `EVENTS`; `publishes`, `rebuilds` and `deadLetters` cover the exceptions
+above). A grant that changes in `cadenway-ops` changes here with it.
+
+`startTestNats({ user, streams })` runs the broker on its own. It creates `EVENTS` (`evt.>`, 7 days,
+1 GiB), `EVENTS_RESTRICTED` (`restricted.>`, 7 days, 64 MiB) and `EVENTS_DLQ` (`dlq.>`, 30 days,
+256 MiB) as `ensure-streams.sh` does: file storage, oldest messages dropped first, duplicates of a
+`Nats-Msg-Id` refused for two minutes. `nats.user`, `nats.admin` and `nats.permissions` give the
+credentials and the permissions of the run; `EVENTS_STREAM`, `EVENTS_RESTRICTED_STREAM`,
+`EVENTS_DLQ_STREAM` and `EVENTS_SUBJECTS` name the streams.
 
 ### Internal tokens
 
