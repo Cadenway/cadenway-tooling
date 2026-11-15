@@ -150,10 +150,15 @@ three minutes (`hookTimeout: 180_000`).
 roles as `cadenway-ops` does ([`docs/database.md`](https://github.com/Cadenway/cadenway-ops/blob/main/docs/database.md)),
 so a test runs with the privileges of the deployed service:
 
-| Role                  | May                                                                                                                                                                                                                     | Timeouts (statement, lock, idle in transaction) |
-| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
-| `<database>_migrator` | Owns the database and runs the DDL                                                                                                                                                                                      | 15 min, 5 s, 60 s                               |
-| `<database>_app`      | Connects, then reads and writes the rows of every schema, table and sequence the migrator creates; owns nothing, creates no schema, table or temporary table, is not a superuser and does not bypass row-level security | 10 s, 5 s, 30 s                                 |
+| Role                  | May                                                                                                                                                                                                                         | Timeouts (statement, lock, idle in transaction) |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| `<database>_migrator` | Owns the database and runs the DDL                                                                                                                                                                                          | 15 min, 5 s, 60 s                               |
+| `<database>_app`      | Connects, then reads and writes the rows of the tables and sequences the migrator creates in `public`; owns nothing, creates no schema, table or temporary table, is not a superuser and does not bypass row-level security | 10 s, 5 s, 30 s                                 |
+
+Another schema the migrator creates stays closed to the application role unless the code that
+creates it grants what the runtime needs, as `@cadenway/nest-jobs` does for `pgboss`. The journal of
+the migrations, `drizzle.__drizzle_migrations`, is therefore out of its reach: a deleted journal row
+would make the next migration run apply that migration again.
 
 | Member                     | Gives                                                                                        |
 | -------------------------- | -------------------------------------------------------------------------------------------- |
@@ -297,4 +302,6 @@ The tags are those `cadenway-ops` pins in `compose/infra.yaml`; each `start*` fu
 `image` option. A service never depends on `testcontainers` itself.
 
 `pg` and `drizzle-orm` (the database helpers) and `@cadenway/nest-common` (the internal tokens)
-are optional peers, loaded when first used.
+are optional peers, loaded when first used. `@cadenway/nest-messaging` is an optional peer too
+(`>=0.0.1 <1.0.0`): nothing here imports it, and the specs of this package run a sample service
+on `MessagingModule` 0.1, connected with `NATS_USER`, `NATS_PASSWORD` and `_INBOX.<user>`.
