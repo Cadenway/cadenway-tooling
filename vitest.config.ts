@@ -10,6 +10,16 @@ export default defineConfig({
           include: ['packages/*/src/**/*.spec.ts'],
         },
       },
+      {
+        extends: true,
+        test: {
+          name: 'integration',
+          include: ['packages/*/src/**/*.int-spec.ts'],
+          // Integration specs start disposable PostgreSQL, NATS and Redis containers in their hooks.
+          testTimeout: 60_000,
+          hookTimeout: 180_000,
+        },
+      },
     ],
   },
 });

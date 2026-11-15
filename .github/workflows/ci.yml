@@ -28,3 +28,5 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - run: pnpm quality
+      # Starts disposable PostgreSQL, NATS and Redis through the Docker of the runner.
+      - run: pnpm test:integration
