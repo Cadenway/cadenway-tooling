@@ -3,6 +3,7 @@ import { connect as connectTcp, type Socket } from 'node:net';
 import {
   baseConfigShape,
   createApplication,
+  getOrganizationContext,
   internalTokenVerifierConfigShape,
   loadConfig,
   ProblemException,
@@ -16,8 +17,16 @@ import {
   type DatabaseConfig,
   type TransactionScope,
 } from '@cadenway/nest-common/database';
-import { jetstream, type JetStreamClient } from '@nats-io/jetstream';
-import { connect, headers as natsHeaders, type NatsConnection } from '@nats-io/transport-node';
+import {
+  EventConsumers,
+  EventPublisher,
+  messagingConfigShape,
+  MessagingModule,
+  type EventSchemas,
+  type MessagingConfig,
+} from '@cadenway/nest-messaging';
+import { jetstream } from '@nats-io/jetstream';
+import { connect, type NatsConnection } from '@nats-io/transport-node';
 import {
   Controller,
   Get,
@@ -27,8 +36,7 @@ import {
   Module,
   Param,
   Post,
-  type OnModuleDestroy,
-  type OnModuleInit,
+  type OnApplicationBootstrap,
 } from '@nestjs/common';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { http, HttpResponse } from 'msw';
@@ -59,41 +67,9 @@ const CONTAINER_START_TIMEOUT_MS: number = 180_000;
  * @description
  * Configuration of the sample service, read from the environment `createTestApp` sets.
  */
-interface SampleConfig extends BaseConfig, DatabaseConfig, InternalTokenVerifierConfig {
+interface SampleConfig
+  extends BaseConfig, DatabaseConfig, InternalTokenVerifierConfig, MessagingConfig {
   // #region Properties
-  /**
-   * Property NATS_URL
-   *
-   * @description
-   * Address of the NATS server.
-   *
-   * @type {string}
-   * @readonly
-   */
-  readonly NATS_URL: string;
-
-  /**
-   * Property NATS_USER
-   *
-   * @description
-   * NATS user of the service, as cadenway-ops names it.
-   *
-   * @type {string}
-   * @readonly
-   */
-  readonly NATS_USER: string;
-
-  /**
-   * Property NATS_PASSWORD
-   *
-   * @description
-   * Password of that user.
-   *
-   * @type {string}
-   * @readonly
-   */
-  readonly NATS_PASSWORD: string;
-
   /**
    * Property MIGRATION_DATABASE_URL
    *
@@ -129,25 +105,55 @@ interface SampleConfig extends BaseConfig, DatabaseConfig, InternalTokenVerifier
 const SAMPLE_CONFIG: unique symbol = Symbol('SAMPLE_CONFIG');
 
 /**
- * Class EventRelay
+ * Constant ENVELOPE
  *
  * @description
- * Publishes events straight to JetStream. It stands in for the outbox relay of
- * `@cadenway/nest-messaging`, which is not released yet.
+ * Fields every Cadenway event carries, as `@cadenway/nest-messaging` reads them.
+ *
+ * @type {z.ZodRawShape}
+ */
+const ENVELOPE = {
+  id: z.uuid(),
+  occurredAt: z.iso.datetime({ offset: true }),
+  organizationId: z.uuid().nullable(),
+  actor: z.object({ type: z.string(), id: z.string() }),
+  version: z.number().int(),
+};
+
+/**
+ * Constant SAMPLE_EVENTS
+ *
+ * @description
+ * Event schemas of the sample service. A real service passes the `eventSchemas` of
+ * `@cadenway/contracts`; the kit only needs zod validators of the envelope, by event name.
+ *
+ * @type {EventSchemas}
+ */
+const SAMPLE_EVENTS = {
+  'task.status-changed.v1': z.object({ ...ENVELOPE, taskId: z.string(), status: z.string() }),
+  'organization.deleted.v1': z.object(ENVELOPE),
+} satisfies EventSchemas;
+
+/**
+ * Class OrganizationDeletedHandler
+ *
+ * @description
+ * Consumes `organization.deleted.v1` through a durable consumer of `@cadenway/nest-messaging`,
+ * as the sample service's own NATS user.
  */
 @Injectable()
-class EventRelay implements OnModuleInit, OnModuleDestroy {
+class OrganizationDeletedHandler implements OnApplicationBootstrap {
   // #region Properties
   /**
-   * Property connection
+   * Property received
    *
    * @description
-   * Connection opened when the module starts.
+   * Payloads handled, in order.
    *
-   * @type {NatsConnection | undefined}
-   * @private
+   * @type {unknown[]}
+   * @readonly
    */
-  private connection: NatsConnection | undefined;
+  public readonly received: unknown[] = [];
   // #endregion
 
   // #region Constructor
@@ -155,66 +161,33 @@ class EventRelay implements OnModuleInit, OnModuleDestroy {
    * Constructor
    *
    * @description
-   * Receives the configuration.
+   * Receives the consumers of the kit.
    *
-   * @param {SampleConfig} config - Validated configuration.
+   * @param {EventConsumers} consumers - Consumers of `@cadenway/nest-messaging`.
    * @constructor
    */
-  public constructor(@Inject(SAMPLE_CONFIG) private readonly config: SampleConfig) {}
+  public constructor(@Inject(EventConsumers) private readonly consumers: EventConsumers) {}
   // #endregion
 
   // #region Methods
   /**
-   * Method onModuleInit
+   * Method onApplicationBootstrap
    *
    * @description
-   * Opens the connection.
+   * Registers the handler, which creates its durable consumer `task-service__purge-organization`.
    *
-   * @returns {Promise<void>} Resolves once connected.
+   * @returns {Promise<void>} Resolves once subscribed.
    */
-  public async onModuleInit(): Promise<void> {
-    // As @cadenway/nest-messaging will: the broker only lets a user read its own inbox prefix.
-    this.connection = await connect({
-      servers: this.config.NATS_URL,
-      user: this.config.NATS_USER,
-      pass: this.config.NATS_PASSWORD,
-      inboxPrefix: `_INBOX.${this.config.NATS_USER}`,
+  public async onApplicationBootstrap(): Promise<void> {
+    await this.consumers.subscribe({
+      handler: 'purge-organization',
+      schemas: SAMPLE_EVENTS,
+      event: 'organization.deleted.v1',
+      handle: (payload: unknown): Promise<void> => {
+        this.received.push(payload);
+        return Promise.resolve();
+      },
     });
-  }
-
-  /**
-   * Method publish
-   *
-   * @description
-   * Publishes one event with its id as `Nats-Msg-Id`.
-   *
-   * @param {string} name - Event name.
-   * @param {{ id: string }} payload - Event payload.
-   * @returns {Promise<void>} Resolves once stored.
-   */
-  public async publish(name: string, payload: { id: string }): Promise<void> {
-    if (this.connection === undefined) {
-      throw new Error('The relay is not connected.');
-    }
-    const client: JetStreamClient = jetstream(this.connection);
-    const messageHeaders: ReturnType<typeof natsHeaders> = natsHeaders();
-    messageHeaders.set('Cadenway-Organization-Id', fixtures.atelierNord().organization.id);
-    await client.publish(`evt.${name}`, JSON.stringify(payload), {
-      msgID: payload.id,
-      headers: messageHeaders,
-    });
-  }
-
-  /**
-   * Method onModuleDestroy
-   *
-   * @description
-   * Closes the connection.
-   *
-   * @returns {Promise<void>} Resolves once closed.
-   */
-  public async onModuleDestroy(): Promise<void> {
-    await this.connection?.close();
   }
   // #endregion
 }
@@ -233,16 +206,16 @@ class TaskController {
    * Constructor
    *
    * @description
-   * Receives the runner, the relay and the configuration.
+   * Receives the runner, the publisher and the configuration.
    *
    * @param {TenantTransactionRunner} tenant - Tenant transaction runner of the kit.
-   * @param {EventRelay} relay - Event relay.
+   * @param {EventPublisher} events - Event publisher of `@cadenway/nest-messaging`.
    * @param {SampleConfig} config - Validated configuration.
    * @constructor
    */
   public constructor(
     @Inject(TenantTransactionRunner) private readonly tenant: TenantTransactionRunner,
-    @Inject(EventRelay) private readonly relay: EventRelay,
+    @Inject(EventPublisher) private readonly events: EventPublisher,
     @Inject(SAMPLE_CONFIG) private readonly config: SampleConfig,
   ) {}
   // #endregion
@@ -279,14 +252,24 @@ class TaskController {
   public async complete(@Param('id') id: string): Promise<{ id: string; status: string }> {
     const updated: { rows: unknown[] } = await this.tenant.run((tx: TransactionScope) =>
       tx.client.query(
-        "update tasks set status = 'done' where display_key = $1 returning display_key",
+        "update tasks set status = 'done' where display_key = $1 returning organization_id",
         [id],
       ),
     );
-    if (updated.rows.length === 0) {
+    const organizationId: string | undefined = (
+      updated.rows[0] as { organization_id: string } | undefined
+    )?.organization_id;
+    if (organizationId === undefined) {
       throw new ProblemException({ status: 404, code: 'task.not-found' });
     }
-    await this.relay.publish('task.status-changed.v1', { id: `evt-${id}-done` });
+    // A gateway-style publish, without an outbox: the sample has no outbox table.
+    await this.events.publish(SAMPLE_EVENTS, 'task.status-changed.v1', {
+      organizationId,
+      actor: { type: 'user', id: getOrganizationContext()?.actor.id ?? 'unknown' },
+      version: 1,
+      taskId: id,
+      status: 'done',
+    });
     const notified: Response = await fetch(this.config.CHAT_WEBHOOK_URL, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -315,9 +298,7 @@ async function createSampleService(): Promise<NestExpressApplication> {
       ...baseConfigShape,
       ...databaseConfigShape,
       ...internalTokenVerifierConfigShape,
-      NATS_URL: z.string(),
-      NATS_USER: z.string(),
-      NATS_PASSWORD: z.string(),
+      ...messagingConfigShape,
       MIGRATION_DATABASE_URL: z.url(),
       CHAT_WEBHOOK_URL: z.url(),
     }),
@@ -330,9 +311,18 @@ async function createSampleService(): Promise<NestExpressApplication> {
    * Module of the sample service, declared once the configuration is known.
    */
   @Module({
-    imports: [DatabaseModule.forRoot({ connectionString: config.DATABASE_URL })],
+    imports: [
+      DatabaseModule.forRoot({ connectionString: config.DATABASE_URL }),
+      // As a deployed service: its own NATS user, and the streams left to cadenway-ops.
+      MessagingModule.forRoot({
+        service: 'task-service',
+        servers: config.NATS_URL,
+        ...(config.NATS_USER === undefined ? {} : { user: config.NATS_USER }),
+        ...(config.NATS_PASSWORD === undefined ? {} : { password: config.NATS_PASSWORD }),
+      }),
+    ],
     controllers: [TaskController],
-    providers: [{ provide: SAMPLE_CONFIG, useValue: config }, EventRelay],
+    providers: [{ provide: SAMPLE_CONFIG, useValue: config }, OrganizationDeletedHandler],
   })
   class AppModule {}
 
@@ -564,12 +554,20 @@ describe('createTestApp for a service', () => {
       )
       .expect(200, { id: 'CAD-482', status: 'done' });
 
+    // Published by EventPublisher of @cadenway/nest-messaging with the service's own NATS user,
+    // read by the recorder as admin.
     const event: RecordedEvent<{ id: string }> = await testApp.events.waitFor<{ id: string }>(
       'task.status-changed.v1',
     );
-    expect(event.payload).toEqual({ id: 'evt-CAD-482-done' });
+    expect(event.payload).toMatchObject({
+      organizationId: nord.organization.id,
+      actor: { type: 'user', id: nord.CM.id },
+      taskId: 'CAD-482',
+      status: 'done',
+    });
     expect(event.headers).toMatchObject({
-      'Nats-Msg-Id': 'evt-CAD-482-done',
+      'Nats-Msg-Id': event.payload.id,
+      'Cadenway-Event-Name': 'task.status-changed.v1',
       'Cadenway-Organization-Id': nord.organization.id,
     });
     expect(notifications).toEqual([{ text: 'CAD-482 is done' }]);
@@ -615,13 +613,27 @@ describe('createTestApp for a service', () => {
   });
 
   it('feeds a handler an event another service would publish', async () => {
-    await testApp.nats.publish('organization.deleted.v1', {
-      id: 'evt-organization-deleted',
+    const deleted: { id: string; organizationId: string } = {
+      id: '019a0000-0000-7000-8000-00000000d001',
       organizationId: lumen.organization.id,
+    };
+    await testApp.nats.publish('organization.deleted.v1', {
+      ...deleted,
+      occurredAt: '2026-11-15T09:00:00.000Z',
+      actor: { type: 'system', id: 'organization-service' },
+      version: 1,
     });
 
     const event: RecordedEvent = await testApp.events.waitFor('organization.deleted.v1');
-    expect(event.headers['Nats-Msg-Id']).toBe('evt-organization-deleted');
+    expect(event.headers['Nats-Msg-Id']).toBe(deleted.id);
+    // The durable consumer of @cadenway/nest-messaging, created with the service's own user.
+    const handler: OrganizationDeletedHandler = testApp.app.get(OrganizationDeletedHandler);
+    await vi.waitFor(
+      () => {
+        expect(handler.received).toEqual([expect.objectContaining(deleted)]);
+      },
+      { timeout: 10_000 },
+    );
   });
 
   it('says which option starts a dependency that was not asked for', () => {
