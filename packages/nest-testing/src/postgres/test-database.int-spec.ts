@@ -156,27 +156,64 @@ describe('startTestDatabase', () => {
     expect(owner.rows[0]?.owner).toBe('task_migrator');
   });
 
-  it('gives the application role the rows of every schema the migrator creates', async () => {
-    // The jobs keep their tables in a schema of their own, created by the migrations.
+  it('gives the application role the rows the migrator creates in public', async () => {
+    await database.execute([
+      'create table "audit_entries" ("id" serial primary key, "label" text not null)',
+    ]);
+
+    // The sequence of the serial column is granted with the table.
+    await database.app.query('insert into audit_entries (label) values ($1)', ['created']);
+    const entries: { rows: { label: string }[] } = await database.app.query(
+      'select label from audit_entries',
+    );
+    expect(entries.rows).toEqual([{ label: 'created' }]);
+    await expect(database.app.query('drop table audit_entries')).rejects.toThrow(/must be owner/u);
+  });
+
+  it('keeps another schema of the migrator closed until its creator grants access', async () => {
+    // The jobs keep their tables in a schema of their own; @cadenway/nest-jobs grants the
+    // application role what its runtime needs when it provisions that schema.
     await database.execute([
       'create schema "pgboss"',
       'create table "pgboss"."job" ("id" serial primary key, "name" text not null)',
     ]);
 
+    await expect(database.app.query('select name from pgboss.job')).rejects.toThrow(
+      /permission denied for schema pgboss/u,
+    );
+
+    await database.execute([
+      'grant usage on schema "pgboss" to "task_app"',
+      'grant select, insert, update, delete on "pgboss"."job" to "task_app"',
+      'grant usage, select on all sequences in schema "pgboss" to "task_app"',
+    ]);
     await database.app.query('insert into pgboss.job (name) values ($1)', ['purge-trash']);
     const jobs: { rows: { name: string }[] } = await database.app.query(
       'select name from pgboss.job',
     );
     expect(jobs.rows).toEqual([{ name: 'purge-trash' }]);
     await expect(database.app.query('drop table pgboss.job')).rejects.toThrow(/must be owner/u);
-    // The migration journal of Drizzle is readable, never alterable in structure.
-    const journal: { rows: { n: number }[] } = await database.app.query(
+  });
+
+  it('keeps the migration journal of Drizzle out of reach of the application role', async () => {
+    // A deleted journal row would make the next migration run apply that migration again.
+    const statements: readonly string[] = [
+      'select count(*) from drizzle.__drizzle_migrations',
+      "insert into drizzle.__drizzle_migrations (hash, created_at) values ('forged', 0)",
+      'update drizzle.__drizzle_migrations set hash = hash',
+      'delete from drizzle.__drizzle_migrations',
+      'alter table drizzle.__drizzle_migrations add column "x" int',
+    ];
+
+    for (const statement of statements) {
+      await expect(database.app.query(statement)).rejects.toThrow(
+        /permission denied for schema drizzle/u,
+      );
+    }
+    const journal: { rows: { n: number }[] } = await database.admin.query(
       'select count(*)::int as n from drizzle.__drizzle_migrations',
     );
     expect(journal.rows[0]?.n).toBe(1);
-    await expect(
-      database.app.query('alter table drizzle.__drizzle_migrations add column "x" int'),
-    ).rejects.toThrow(/must be owner/u);
   });
 
   it('sets the timeouts of the deployed roles', async () => {

@@ -415,8 +415,10 @@ async function inTransaction<TResult>(
  * cadenway-ops does (`docs/database.md`): the migrator owns the database and runs the DDL; the
  * application role may connect, owns nothing, creates nothing (no schema, no table, no temporary
  * table), is neither a superuser nor exempt from row-level security, and receives the data rights
- * on every schema, table and sequence the migrator creates. Both carry the timeouts of the
- * deployed roles. Nothing starts before this call, and `stop` removes everything.
+ * on the tables and sequences the migrator creates in `public` only. Another schema, the `drizzle`
+ * journal of the migrations included, is closed to it unless its creator grants access. Both
+ * carry the timeouts of the deployed roles. Nothing starts before this call, and `stop` removes
+ * everything.
  *
  * @param {TestDatabaseOptions} options - Service name and image.
  * @returns {Promise<TestDatabase>} The running database.
@@ -472,8 +474,12 @@ export async function startTestDatabase(options: TestDatabaseOptions = {}): Prom
     const migratorRole: string = quoteIdentifier(roles.migrator);
     const appRole: string = quoteIdentifier(roles.app);
     const databaseName: string = quoteIdentifier(database);
-    // What compose/postgres/init/10-service-databases.sh of cadenway-ops does for one service,
-    // statement for statement, so a test runs with the privileges of the deployed service.
+    // What compose/postgres/init/10-service-databases.sh of cadenway-ops does for one new
+    // database, so a test runs with the privileges of the deployed service. The default
+    // privileges of the application role cover `public` only: another schema the migrator
+    // creates, the `drizzle` journal of the migrations included, stays closed to it unless the
+    // code that creates it grants access (as @cadenway/nest-jobs does for `pgboss`). The revokes
+    // the script runs to bring an older volume up to date have nothing to undo here.
     await admin.query(`
       create role ${migratorRole} with login nosuperuser nocreatedb nocreaterole noreplication
         nobypassrls password '${migratorPassword}';
@@ -487,10 +493,9 @@ export async function startTestDatabase(options: TestDatabaseOptions = {}): Prom
       grant connect on database ${databaseName} to ${appRole};
       revoke create on schema public from public;
       grant usage on schema public to ${appRole};
-      alter default privileges for role ${migratorRole} grant usage on schemas to ${appRole};
-      alter default privileges for role ${migratorRole}
+      alter default privileges for role ${migratorRole} in schema public
         grant select, insert, update, delete on tables to ${appRole};
-      alter default privileges for role ${migratorRole}
+      alter default privileges for role ${migratorRole} in schema public
         grant usage, select on sequences to ${appRole};
     `);
     const migrator: Pool = open(migratorUrl);
