@@ -754,10 +754,12 @@ function checkFile(
   }
 
   if (!owner) {
+    // The process entry points: `main.ts`, `migrate.ts` and `telemetry.ts`, which
+    // `@cadenway/nest-common` has preloaded before the application (`node --import`).
     if (
       options.profile === 'service' &&
       unit.file.startsWith('src/') &&
-      !/^src\/(?:app\.module\.ts$|main\.ts$|migrate\.ts$|config\/|health\/|infrastructure\/)/u.test(
+      !/^src\/(?:app\.module\.ts$|main\.ts$|migrate\.ts$|telemetry\.ts$|config\/|health\/|infrastructure\/)/u.test(
         unit.file,
       )
     ) {
