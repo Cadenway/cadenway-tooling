@@ -230,6 +230,37 @@ it('flags service use cases that bypass business module ownership', () => {
   ]);
 });
 
+it('accepts the telemetry entry point that @cadenway/nest-common preloads, beside main and migrate', () => {
+  // `node --import ./dist/telemetry.js dist/main.js`: started before anything else is imported.
+  const entryPoints: Readonly<Record<string, string>> = {
+    'src/main.ts': "import './app.module.js';",
+    'src/app.module.ts': 'export class AppModule {}',
+    'src/migrate.ts': 'export {};',
+    'src/telemetry.ts':
+      "import { startTelemetry } from '@cadenway/nest-common/telemetry';\n" +
+      "startTelemetry({ service: 'task-service' });",
+  };
+
+  expect(withProject(entryPoints, 'service')).toEqual([]);
+  expect(withProject(entryPoints, 'gateway')).toEqual([]);
+  // Only those names: another top-level file of a service still belongs to a module.
+  expect(withProject({ ...entryPoints, 'src/tracing.ts': 'export {};' }, 'service')).toEqual([
+    expect.objectContaining({ file: 'src/tracing.ts', rule: 'service-layout' }),
+  ]);
+});
+
+it('rejects the former telemetry exception as stale, so consumers remove it', () => {
+  expect(() =>
+    withProject({ 'src/telemetry.ts': 'export {};' }, 'service', [
+      {
+        file: 'src/telemetry.ts',
+        rule: 'service-layout',
+        reason: 'Process entry point preloaded before main.js.',
+      },
+    ]),
+  ).toThrow('Stale or undocumented architecture exception: src/telemetry.ts (service-layout)');
+});
+
 it('requires even a flat gateway route to call a generated client through an outgoing adapter', () => {
   const findings: readonly ArchitectureFinding[] = withProject(
     {

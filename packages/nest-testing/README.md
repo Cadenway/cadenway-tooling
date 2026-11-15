@@ -15,6 +15,11 @@ const violations = verifyNestArchitecture({
 });
 ```
 
+At the top of `src/`, a service holds only its process entry points (`main.ts`, `migrate.ts`, and
+`telemetry.ts`, which `@cadenway/nest-common` preloads with `node --import ./dist/telemetry.js`),
+`app.module.ts`, and `config/`, `health/` and `infrastructure/`. Anything else belongs to a module
+under `src/modules/<module>/` (`service-layout`).
+
 Use `service` for a business service, `gateway` for an HTTP or realtime gateway, and `kit` for the
 service-kit workspace. Findings carry repository-relative `file`, one-based `line`, `rule` and
 `message`. An exception must name the exact `file` and `rule`, and state its `reason`. The verifier
