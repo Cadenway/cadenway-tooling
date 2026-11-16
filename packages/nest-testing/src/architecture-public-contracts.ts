@@ -11,6 +11,7 @@ interface PublicModule {
 
 interface PublicContractOptions {
   readonly rootDir: string;
+  readonly profile: 'service' | 'gateway';
   readonly program: ts.Program;
   readonly modules: readonly PublicModule[];
   readonly report: (file: string, rule: string, message: string, line?: number) => void;
@@ -467,7 +468,7 @@ function checkEntry(
     (kind) => `${owner.root}/application/use-cases/${kind}/${area}/${operation}`,
   );
   const guardFile =
-    !owner.root.startsWith('src/modules/') && operation.endsWith('-guard')
+    options.profile === 'gateway' && operation.endsWith('-guard')
       ? `${owner.root}/presentation/http/guards/${area}/${operation.slice(0, -6)}.guard.ts`
       : undefined;
   const exports = namedExports(source, checker, error);

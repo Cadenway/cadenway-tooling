@@ -27,10 +27,16 @@ service-kit workspace. Findings carry repository-relative `file`, one-based `lin
 
 For `service` and `gateway`, `convention: 'strict'` enables the V2 folder and dependency rules. It
 requires all authored modules and capabilities to follow the convention, including existing ones.
-Use `profile: 'gateway'` for both HTTP and realtime gateways. The verifier identifies a capability
-by its full path, such as `routes/auth` or `relays/tasks`, and checks public entries against their
-owning module's declarations, exported providers and case signatures. Fixture tests can exercise
-the verifier without starting Nest or any infrastructure.
+Use `profile: 'gateway'` for both HTTP and realtime gateways. Both profiles identify capabilities
+under `src/modules/<module>/`, require a module manifest and Nest composition root, and check
+public entries against the owner's declared consumers, providers and use case signatures. HTTP
+controllers depend on a use case even for one-to-one routes. The gateway profile still keeps SQL
+and transactional outbox code in services, restricts generated clients to their technical
+adapters, and supports explicitly published HTTP guards. Fixture tests run without starting Nest
+or any infrastructure.
+
+`<module>.module.ts` can declare tokens and factory providers inline. The optional
+`composition/` directory holds wiring split into separate files. Strict verification accepts both.
 
 Omit `convention` to keep the existing rules. In that mode, an exception names the exact `file` and
 `rule` and states its `reason`. The verifier rejects stale exceptions. Strict mode rejects exceptions.

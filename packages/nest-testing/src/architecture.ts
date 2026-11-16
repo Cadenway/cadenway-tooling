@@ -8,7 +8,7 @@ import {
   checkStrictImport,
   checkStrictSource,
   isStrictGenerated,
-  needsStrictWiring,
+  isStrictLocalUseCase,
   strictOwnerOf,
   type StrictOwner,
   type StrictProfile,
@@ -756,6 +756,112 @@ function decoratorName(decorator: ts.Decorator, ast: ts.SourceFile): string | un
   return undefined;
 }
 
+const HTTP_ROUTE_DECORATORS: ReadonlySet<string> = new Set([
+  'All',
+  'Copy',
+  'Delete',
+  'Get',
+  'Head',
+  'Lock',
+  'Mkcol',
+  'Move',
+  'Options',
+  'Patch',
+  'Post',
+  'Propfind',
+  'Proppatch',
+  'Put',
+  'QueryMethod',
+  'RequestMapping',
+  'Search',
+  'Sse',
+  'Unlock',
+]);
+
+function delegatesToUseCase(
+  method: ts.MethodDeclaration,
+  rootDir: string,
+  owner: StrictOwner,
+  checker: ts.TypeChecker,
+): boolean {
+  const visited = new Set<ts.MethodDeclaration>();
+
+  function inspect(candidate: ts.MethodDeclaration): true | undefined {
+    if (!candidate.body || visited.has(candidate)) return undefined;
+    visited.add(candidate);
+    return visit(candidate.body);
+  }
+
+  function visit(node: ts.Node): true | undefined {
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
+      const member = node.expression;
+      if (member.name.text === 'execute') {
+        const declarations = checker.getTypeAtLocation(member.expression).getSymbol()?.declarations;
+        if (
+          declarations?.some(
+            (declaration) =>
+              ts.isClassDeclaration(declaration) &&
+              isStrictLocalUseCase(
+                normalizePath(relative(rootDir, declaration.getSourceFile().fileName)),
+                owner,
+              ),
+          )
+        )
+          return true;
+      }
+
+      // A route can delegate through a controller-local helper.
+      if (member.expression.kind === ts.SyntaxKind.ThisKeyword) {
+        const helper = checker.getSymbolAtLocation(member.name)?.valueDeclaration;
+        if (
+          helper &&
+          ts.isMethodDeclaration(helper) &&
+          helper.parent === method.parent &&
+          inspect(helper)
+        ) {
+          return true;
+        }
+      }
+    }
+    return ts.forEachChild(node, visit);
+  }
+
+  return inspect(method) === true;
+}
+
+function checkStrictHttpRoutes(
+  ast: ts.SourceFile,
+  owner: StrictOwner,
+  rootDir: string,
+  checker: ts.TypeChecker,
+  report: Report,
+): void {
+  for (const statement of ast.statements) {
+    if (
+      !ts.isClassDeclaration(statement) ||
+      !ts
+        .getDecorators(statement)
+        ?.some((decorator) => decoratorName(decorator, ast) === 'Controller')
+    )
+      continue;
+
+    for (const member of statement.members) {
+      if (!ts.isMethodDeclaration(member)) continue;
+      const route = ts.getDecorators(member)?.find((decorator) => {
+        const name = decoratorName(decorator, ast);
+        return name !== undefined && HTTP_ROUTE_DECORATORS.has(name);
+      });
+      if (route && !delegatesToUseCase(member, rootDir, owner, checker)) {
+        report(
+          'strict-http-use-case',
+          'Each HTTP route must call execute() on a use case in its own module, including a single-call mirror.',
+          lineOf(ast, route),
+        );
+      }
+    }
+  }
+}
+
 /**
  * Type Report
  *
@@ -1250,23 +1356,21 @@ function checkStrictModules(
   report: (file: string, rule: string, message: string, line?: number) => void,
 ): void {
   const modules = new Map<string, StrictOwner>();
-  const wiringRequired = new Set<string>();
   for (const { file } of sources) {
-    const owner = strictOwnerOf(file, profile);
+    const owner = strictOwnerOf(file);
     if (!owner || isTest(file)) continue;
     if (!modules.has(owner.root)) modules.set(owner.root, owner);
-    if (profile === 'service' || needsStrictWiring(file, owner)) wiringRequired.add(owner.root);
   }
 
   for (const owner of modules.values()) {
-    if (profile === 'service' && !existsSync(resolve(rootDir, owner.root, 'MODULE.md'))) {
+    if (!existsSync(resolve(rootDir, owner.root, 'MODULE.md'))) {
       report(
         owner.wiring,
         'module-contract',
         `Add ${owner.root}/MODULE.md to describe the owning module.`,
       );
     }
-    if (wiringRequired.has(owner.root) && !fileNames.has(owner.wiring)) {
+    if (!fileNames.has(owner.wiring)) {
       report(
         owner.wiring,
         'module-wiring',
@@ -1280,7 +1384,23 @@ function checkStrictModules(
     sources.map(({ path }) => path),
     compiler,
   );
-  verifyStrictPublicContracts({ rootDir, program, modules: [...modules.values()], report });
+  const checker = program.getTypeChecker();
+  for (const { file, path } of sources) {
+    if (!file.endsWith('.controller.ts')) continue;
+    const owner = strictOwnerOf(file);
+    const ast = program.getSourceFile(path);
+    if (!ast || owner?.layer !== 'presentation') continue;
+    checkStrictHttpRoutes(ast, owner, rootDir, checker, (rule, message, line) =>
+      report(file, rule, message, line),
+    );
+  }
+  verifyStrictPublicContracts({
+    rootDir,
+    profile,
+    program,
+    modules: [...modules.values()],
+    report,
+  });
 }
 
 /**
@@ -1312,7 +1432,7 @@ export function verifyNestArchitecture(
   );
 
   for (const unit of sources) {
-    const strictOwner = strict ? strictOwnerOf(unit.file, strict) : undefined;
+    const strictOwner = strict ? strictOwnerOf(unit.file) : undefined;
     const owner = strict ? strictOwner : getLayer(unit.file, options.profile);
     const report: Report = (rule, message, line) => reportFinding(unit.file, rule, message, line);
     checkFile(unit, owner, fileNames, options, report, !!strict);
@@ -1321,7 +1441,6 @@ export function verifyNestArchitecture(
     if (isTest(unit.file)) continue;
     checkDeclaration(unit, owner, report, !!strict);
     const runtime: GraphEdge[] = [];
-    const mirrorPorts = new Set<string>();
     const onComputedReference = strict
       ? (line: number) =>
           report(
@@ -1351,7 +1470,6 @@ export function verifyNestArchitecture(
           owner: strictOwner,
           edge,
           target,
-          mirrorPorts,
           report,
         });
       }

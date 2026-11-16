@@ -345,6 +345,46 @@ it('accepts a domain-free strict query whose public contracts and Nest wiring ma
   expect(withProject(STRICT_SERVICE, 'service', [], 'strict')).toEqual([]);
 });
 
+it.each(['service', 'gateway'] as const)(
+  'accepts inline Nest wiring without a composition directory for the strict %s profile',
+  (profile) => {
+    const files = Object.fromEntries(
+      Object.entries(STRICT_SERVICE).filter(([file]) => !file.includes('/composition/')),
+    );
+    expect(
+      withProject(
+        {
+          ...files,
+          'src/modules/demo/demo.module.ts': [
+            "import { Module } from '@nestjs/common';",
+            "import type { DemoClock } from './application/ports/outbound/clock/lifecycle/demo-clock.port.js';",
+            "import { SystemClock } from './infrastructure/adapters/clock/system-clock.adapter.js';",
+            "import { DemoController } from './presentation/http/controllers/demo/demo.controller.js';",
+            "import { ReadDemo } from './public/lifecycle/read-demo.js';",
+            "const DEMO_CLOCK = Symbol('demo-clock');",
+            '@Module({',
+            '  controllers: [DemoController],',
+            '  providers: [',
+            '    { provide: DEMO_CLOCK, useFactory: () => new SystemClock() },',
+            '    { provide: ReadDemo, inject: [DEMO_CLOCK], useFactory: (clock: DemoClock) => new ReadDemo(clock) },',
+            '  ],',
+            '  exports: [ReadDemo],',
+            '})',
+            'export class DemoModule {}',
+          ].join('\n'),
+          'src/modules/demo/infrastructure/adapters/clock/system-clock.adapter.ts': [
+            "import type { DemoClock } from '../../../application/ports/outbound/clock/lifecycle/demo-clock.port.js';",
+            'export class SystemClock implements DemoClock { now(): Date { return new Date(0); } }',
+          ].join('\n'),
+        },
+        profile,
+        [],
+        'strict',
+      ),
+    ).toEqual([]);
+  },
+);
+
 it('reports a repository re-export and a private type nested in a public result', () => {
   const privateModel: string =
     'src/modules/demo/application/models/lifecycle/audit-detail.model.ts';
@@ -465,7 +505,10 @@ it('keeps provider SDKs at the service boundary and rejects SQL in the gateway',
 
   const gatewayFindings: readonly ArchitectureFinding[] = withProject(
     {
-      'src/presence/infrastructure/adapters/pg/presence.adapter.ts':
+      'src/modules/presence/MODULE.md': MODULE_DOC,
+      'src/modules/presence/presence.module.ts':
+        'import { Module } from "@nestjs/common"; @Module({}) export class PresenceModule {}',
+      'src/modules/presence/infrastructure/adapters/pg/presence.adapter.ts':
         "import type { Pool } from 'pg'; export class PresenceAdapter { constructor(private readonly db: Pool) {} }",
     },
     'gateway',
@@ -510,15 +553,26 @@ it('allows kit modules in technical bootstrap without allowing direct SDKs there
   ).toEqual([]);
 });
 
-const MIRROR_CONTROLLER: string =
-  'src/routes/me/presentation/http/controllers/users/me.controller.ts';
+const ME_ROOT: string = 'src/modules/me';
+const ME_MODULE: string = ME_ROOT + '/me.module.ts';
+const MIRROR_CONTROLLER: string = ME_ROOT + '/presentation/http/controllers/users/me.controller.ts';
 const MIRROR_PORT: string =
-  'src/routes/me/application/ports/outbound/identity/users/identity-users.port.ts';
-const MIRROR_TOKEN: string = 'src/routes/me/composition/tokens/users/identity-users.token.ts';
+  ME_ROOT + '/application/ports/outbound/identity/users/identity-users.port.ts';
+const MIRROR_TOKEN: string = ME_ROOT + '/composition/tokens/users/identity-users.token.ts';
+const ME_USE_CASE: string =
+  ME_ROOT + '/application/use-cases/queries/users/get-me/get-me.use-case.ts';
+const TASK_DETAIL: string = 'src/modules/task-detail';
 
 const STRICT_HTTP_GATEWAY: Readonly<Record<string, string>> = {
   'tsconfig.base.json':
-    '{"compilerOptions":{"module":"nodenext","experimentalDecorators":true,"paths":{"@clients/*":["./src/clients/*"],"@routes/*":["./src/routes/*"]}}}',
+    '{"compilerOptions":{"module":"nodenext","experimentalDecorators":true,"paths":{"@clients/*":["./src/clients/*"],"@me/*":["./src/modules/me/*"]}}}',
+  'src/app.module.ts': [
+    "import { Module } from '@nestjs/common';",
+    "import { ClientsModule } from './clients/clients.module.js';",
+    "import { MeModule } from './modules/me/me.module.js';",
+    "import { TaskDetailModule } from './modules/task-detail/task-detail.module.js';",
+    '@Module({ imports: [ClientsModule, MeModule, TaskDetailModule] }) export class AppModule {}',
+  ].join('\n'),
   'src/clients/generated/identity-service.ts': 'export const getUser = () => ({ id: "demo" });',
   'src/presentation/http/mappers/current-user.mapper.ts':
     'export const toCurrentUser = (user: { id: string }) => ({ id: user.id });',
@@ -532,19 +586,27 @@ const STRICT_HTTP_GATEWAY: Readonly<Record<string, string>> = {
     '@Module({ providers: [IdentityServiceClient], exports: [IdentityServiceClient] })',
     'export class ClientsModule {}',
   ].join('\n'),
+  [ME_ROOT + '/MODULE.md']: MODULE_DOC,
   [MIRROR_PORT]: 'export interface IdentityUsers { readUser(): { readonly id: string }; }',
   [MIRROR_TOKEN]: 'export const IDENTITY_USERS = Symbol("identity-users");',
-  [MIRROR_CONTROLLER]: [
-    "import { Controller, Inject } from '@nestjs/common';",
-    "import { toCurrentUser } from '../../../../../../presentation/http/mappers/current-user.mapper.js';",
-    "import type { IdentityUsers } from '../../../../application/ports/outbound/identity/users/identity-users.port.js';",
-    "import { IDENTITY_USERS } from '../../../../composition/tokens/users/identity-users.token.js';",
-    '@Controller("me") export class MeController {',
-    '  constructor(@Inject(IDENTITY_USERS) private readonly users: IdentityUsers) {}',
-    '  get() { return toCurrentUser(this.users.readUser()); }',
+  [ME_USE_CASE]: [
+    "import type { IdentityUsers } from '../../../../ports/outbound/identity/users/identity-users.port.js';",
+    'export class GetMe {',
+    '  constructor(private readonly users: IdentityUsers) {}',
+    '  execute() { return this.users.readUser(); }',
     '}',
   ].join('\n'),
-  'src/routes/me/infrastructure/adapters/identity/identity-users.adapter.ts': [
+  [MIRROR_CONTROLLER]: [
+    "import { Controller, Get } from '@nestjs/common';",
+    "import { toCurrentUser } from '../../../../../../presentation/http/mappers/current-user.mapper.js';",
+    "import { GetMe as ReadCurrentUser } from '@me/application/use-cases/queries/users/get-me/get-me.use-case.js';",
+    '@Controller("me") export class MeController {',
+    '  constructor(private readonly getMe: ReadCurrentUser) {}',
+    '  @Get() read() { return this.loadCurrentUser(); }',
+    '  private loadCurrentUser() { return toCurrentUser(this.getMe.execute()); }',
+    '}',
+  ].join('\n'),
+  [ME_ROOT + '/infrastructure/adapters/identity/identity-users.adapter.ts']: [
     "import type { IdentityServiceClient } from '@clients/identity-service.client.js';",
     "import type { IdentityUsers } from '../../../application/ports/outbound/identity/users/identity-users.port.js';",
     'export class IdentityUsersAdapter implements IdentityUsers {',
@@ -552,7 +614,7 @@ const STRICT_HTTP_GATEWAY: Readonly<Record<string, string>> = {
     '  readUser() { return this.client.readUser(); }',
     '}',
   ].join('\n'),
-  'src/routes/me/composition/providers/adapters/users/identity-users.provider.ts': [
+  [ME_ROOT + '/composition/providers/adapters/users/identity-users.provider.ts']: [
     "import { IdentityServiceClient } from '@clients/identity-service.client.js';",
     "import { IdentityUsersAdapter } from '../../../../infrastructure/adapters/identity/identity-users.adapter.js';",
     "import { IDENTITY_USERS } from '../../../tokens/users/identity-users.token.js';",
@@ -562,72 +624,95 @@ const STRICT_HTTP_GATEWAY: Readonly<Record<string, string>> = {
     '  useFactory: (client: IdentityServiceClient) => new IdentityUsersAdapter(client),',
     '};',
   ].join('\n'),
-  'src/routes/me/me.module.ts': [
+  [ME_ROOT + '/composition/providers/use-cases/users/get-me.provider.ts']: [
+    "import type { IdentityUsers } from '../../../../application/ports/outbound/identity/users/identity-users.port.js';",
+    "import { GetMe } from '../../../../application/use-cases/queries/users/get-me/get-me.use-case.js';",
+    "import { IDENTITY_USERS } from '../../../tokens/users/identity-users.token.js';",
+    'export const getMeProvider = {',
+    '  provide: GetMe,',
+    '  inject: [IDENTITY_USERS],',
+    '  useFactory: (users: IdentityUsers) => new GetMe(users),',
+    '};',
+  ].join('\n'),
+  [ME_MODULE]: [
     "import { Module } from '@nestjs/common';",
     "import { ClientsModule } from '../../clients/clients.module.js';",
     "import { identityUsersProvider } from './composition/providers/adapters/users/identity-users.provider.js';",
+    "import { getMeProvider } from './composition/providers/use-cases/users/get-me.provider.js';",
     "import { MeController } from './presentation/http/controllers/users/me.controller.js';",
-    '@Module({ imports: [ClientsModule], controllers: [MeController], providers: [identityUsersProvider] })',
+    '@Module({ imports: [ClientsModule], controllers: [MeController], providers: [identityUsersProvider, getMeProvider] })',
     'export class MeModule {}',
   ].join('\n'),
-  'src/aggregates/tasks/application/use-cases/queries/lifecycle/get-task-detail/get-task-detail.use-case.ts':
-    'export class GetTaskDetail { execute() { return { task: true, comments: [] }; } }',
-  'src/aggregates/tasks/presentation/http/controllers/tasks/task-detail.controller.ts': [
-    "import { Controller } from '@nestjs/common';",
-    "import { GetTaskDetail } from '../../../../application/use-cases/queries/lifecycle/get-task-detail/get-task-detail.use-case.js';",
-    '@Controller("tasks") export class TaskDetailController {',
-    '  constructor(private readonly query: GetTaskDetail) {}',
-    '  read() { return this.query.execute(); }',
+  [TASK_DETAIL + '/MODULE.md']: MODULE_DOC,
+  [TASK_DETAIL + '/application/ports/outbound/tasks/detail/tasks.port.ts']:
+    'export interface Tasks { findTask(): string; }',
+  [TASK_DETAIL + '/application/ports/outbound/comments/detail/comments.port.ts']:
+    'export interface Comments { findComments(): string[]; }',
+  [TASK_DETAIL +
+  '/application/use-cases/queries/lifecycle/get-task-detail/get-task-detail.use-case.ts']: [
+    "import type { Tasks } from '../../../../ports/outbound/tasks/detail/tasks.port.js';",
+    "import type { Comments } from '../../../../ports/outbound/comments/detail/comments.port.js';",
+    'export class GetTaskDetail {',
+    '  constructor(private readonly tasks: Tasks, private readonly comments: Comments) {}',
+    '  execute() { return { task: this.tasks.findTask(), comments: this.comments.findComments() }; }',
     '}',
   ].join('\n'),
-  'src/aggregates/tasks/tasks.module.ts': [
-    "import { Module } from '@nestjs/common';",
-    "import { GetTaskDetail } from './application/use-cases/queries/lifecycle/get-task-detail/get-task-detail.use-case.js';",
-    "import { TaskDetailController } from './presentation/http/controllers/tasks/task-detail.controller.js';",
-    '@Module({ controllers: [TaskDetailController], providers: [GetTaskDetail] })',
-    'export class TasksModule {}',
+  [TASK_DETAIL + '/presentation/http/controllers/tasks/task-detail.controller.ts']: [
+    "import { Controller, Get } from '@nestjs/common';",
+    "import { GetTaskDetail } from '../../../../application/use-cases/queries/lifecycle/get-task-detail/get-task-detail.use-case.js';",
+    '@Controller("tasks") export class TaskDetailController {',
+    '  constructor(private readonly detail: GetTaskDetail) {}',
+    '  @Get() read() { return this.detail.execute(); }',
+    '}',
   ].join('\n'),
-  'src/public/contact/presentation/http/controllers/contact/contact.controller.ts':
-    'import { Controller } from "@nestjs/common"; @Controller("contact") export class ContactController {}',
-  'src/public/contact/contact.module.ts': [
+  [TASK_DETAIL + '/composition/providers/use-cases/lifecycle/get-task-detail.provider.ts']: [
+    "import { GetTaskDetail } from '../../../../application/use-cases/queries/lifecycle/get-task-detail/get-task-detail.use-case.js';",
+    'export const taskDetailProvider = {',
+    '  provide: GetTaskDetail,',
+    '  useFactory: () => new GetTaskDetail({ findTask: () => "demo" }, { findComments: () => [] }),',
+    '};',
+  ].join('\n'),
+  [TASK_DETAIL + '/task-detail.module.ts']: [
     "import { Module } from '@nestjs/common';",
-    "import { ContactController } from './presentation/http/controllers/contact/contact.controller.js';",
-    '@Module({ controllers: [ContactController] }) export class ContactModule {}',
+    "import { taskDetailProvider } from './composition/providers/use-cases/lifecycle/get-task-detail.provider.js';",
+    "import { TaskDetailController } from './presentation/http/controllers/tasks/task-detail.controller.js';",
+    '@Module({ controllers: [TaskDetailController], providers: [taskDetailProvider] })',
+    'export class TaskDetailModule {}',
   ].join('\n'),
 };
 
-it('accepts mirror routes, aggregates and public flows with local gateway ownership', () => {
+it('accepts one-to-one and aggregate gateway modules with local use cases and shared clients', () => {
   expect(withProject(STRICT_HTTP_GATEWAY, 'gateway', [], 'strict')).toEqual([]);
 });
 
 it('lets only declared gateway consumers use an exported guard through its public entry', () => {
-  const guardEntry: string = '../../../../../../auth/public/session/session-guard.js';
+  const guardEntry: string = '../../../../../auth/public/session/session-guard.js';
   const routeController: string = [
-    `import { SessionGuard } from '${guardEntry}';`,
+    "import { SessionGuard } from '" + guardEntry + "';",
     STRICT_HTTP_GATEWAY[MIRROR_CONTROLLER]?.replace(
-      'Controller, Inject',
-      'Controller, Inject, UseGuards',
+      'Controller, Get',
+      'Controller, Get, UseGuards',
     ).replace('@Controller("me")', '@Controller("me") @UseGuards(SessionGuard)'),
   ].join('\n');
   const sources: Readonly<Record<string, string>> = {
     ...STRICT_HTTP_GATEWAY,
-    'src/auth/MODULE.md':
-      MODULE_DOC + '| auth.module | routes/me |\n| public/session/session-guard | routes/me |\n',
-    'src/auth/presentation/http/guards/session/session.guard.ts': [
+    'src/modules/auth/MODULE.md':
+      MODULE_DOC + '| auth.module | me |\n| public/session/session-guard | me |\n',
+    'src/modules/auth/presentation/http/guards/session/session.guard.ts': [
       "import { Injectable } from '@nestjs/common';",
       '@Injectable() export class SessionGuard { canActivate(): boolean { return true; } }',
     ].join('\n'),
-    'src/auth/public/session/session-guard.ts':
+    'src/modules/auth/public/session/session-guard.ts':
       "export { SessionGuard } from '../../presentation/http/guards/session/session.guard.js';",
-    'src/auth/auth.module.ts': [
+    'src/modules/auth/auth.module.ts': [
       "import { Module } from '@nestjs/common';",
       "import { SessionGuard } from './public/session/session-guard.js';",
       '@Module({ providers: [SessionGuard], exports: [SessionGuard] }) export class AuthModule {}',
     ].join('\n'),
     [MIRROR_CONTROLLER]: routeController,
-    'src/routes/me/me.module.ts': [
-      "import { AuthModule } from '../../auth/auth.module.js';",
-      STRICT_HTTP_GATEWAY['src/routes/me/me.module.ts']?.replace(
+    [ME_MODULE]: [
+      "import { AuthModule } from '../auth/auth.module.js';",
+      STRICT_HTTP_GATEWAY[ME_MODULE]?.replace(
         'imports: [ClientsModule]',
         'imports: [ClientsModule, AuthModule]',
       ),
@@ -639,9 +724,8 @@ it('lets only declared gateway consumers use an exported guard through its publi
     withProject(
       {
         ...sources,
-        'src/auth/MODULE.md':
-          MODULE_DOC +
-          '| auth.module | routes/me |\n| public/session/session-guard | public/contact |\n',
+        'src/modules/auth/MODULE.md':
+          MODULE_DOC + '| auth.module | me |\n| public/session/session-guard | task-detail |\n',
       },
       'gateway',
       [],
@@ -654,7 +738,7 @@ it('lets only declared gateway consumers use an exported guard through its publi
         ...sources,
         [MIRROR_CONTROLLER]: routeController.replace(
           guardEntry,
-          '../../../../../../auth/presentation/http/guards/session/session.guard.js',
+          '../../../../../auth/presentation/http/guards/session/session.guard.js',
         ),
       },
       'gateway',
@@ -671,7 +755,7 @@ it('rejects inverted client wiring and direct generated-client access even via a
       ...STRICT_HTTP_GATEWAY,
       [clientModule]:
         STRICT_HTTP_GATEWAY[clientModule] +
-        "\nexport { IDENTITY_USERS } from '@routes/me/composition/tokens/users/identity-users.token.js';",
+        "\nexport { IDENTITY_USERS } from '@me/composition/tokens/users/identity-users.token.js';",
       [MIRROR_CONTROLLER]:
         STRICT_HTTP_GATEWAY[MIRROR_CONTROLLER] +
         "\nexport { getUser } from '@clients/generated/identity-service.js';",
@@ -689,43 +773,113 @@ it('rejects inverted client wiring and direct generated-client access even via a
   );
 });
 
-it('requires an application use case when a route combines multiple outbound ports', () => {
+it('rejects direct ports and tokens in a gateway HTTP controller', () => {
   const findings: readonly ArchitectureFinding[] = withProject(
     {
       ...STRICT_HTTP_GATEWAY,
-      'src/routes/me/application/ports/outbound/identity/users/identity-profile.port.ts':
-        'export interface IdentityProfile { readProfile(): string; }',
-      [MIRROR_CONTROLLER]:
-        STRICT_HTTP_GATEWAY[MIRROR_CONTROLLER] +
-        "\nimport type { IdentityProfile } from '@routes/me/application/ports/outbound/identity/users/identity-profile.port.js';",
+      [MIRROR_CONTROLLER]: [
+        "import { Controller, Get, Inject } from '@nestjs/common';",
+        "import type { IdentityUsers } from '@me/application/ports/outbound/identity/users/identity-users.port.js';",
+        "import { IDENTITY_USERS } from '@me/composition/tokens/users/identity-users.token.js';",
+        '@Controller("me") export class MeController {',
+        '  constructor(@Inject(IDENTITY_USERS) private readonly users: IdentityUsers) {}',
+        '  @Get() read() { return this.users.readUser(); }',
+        '}',
+      ].join('\n'),
     },
     'gateway',
     [],
     'strict',
   );
 
+  expect(findings).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ file: MIRROR_CONTROLLER, line: 2, rule: 'layer-direction' }),
+      expect.objectContaining({ file: MIRROR_CONTROLLER, line: 3, rule: 'layer-direction' }),
+      expect.objectContaining({ file: MIRROR_CONTROLLER, rule: 'strict-http-use-case' }),
+    ]),
+  );
+});
+
+it('requires each Nest HTTP route to delegate to a local use case', () => {
+  const original: string =
+    "import { QueryMethod as HttpQuery } from '@nestjs/common';\n" +
+    (STRICT_HTTP_GATEWAY[MIRROR_CONTROLLER] ?? '');
+  const findings: readonly ArchitectureFinding[] = withProject(
+    {
+      ...STRICT_HTTP_GATEWAY,
+      [MIRROR_CONTROLLER]:
+        original.slice(0, original.lastIndexOf('}')) +
+        '  @Get("status") status() { return { status: "ok" }; }\n' +
+        '  @HttpQuery("search") search() { return []; }\n}',
+    },
+    'gateway',
+    [],
+    'strict',
+  );
   expect(findings).toEqual([
-    expect.objectContaining({ file: MIRROR_CONTROLLER, rule: 'strict-mirror-port' }),
+    expect.objectContaining({ file: MIRROR_CONTROLLER, rule: 'strict-http-use-case' }),
+    expect.objectContaining({ file: MIRROR_CONTROLLER, rule: 'strict-http-use-case' }),
   ]);
 });
 
-it('finds unknown layers under each nested gateway owner and distinguishes route auth from edge auth', () => {
-  const unknownLayers: readonly string[] = [
-    'src/routes/auth/presenation/route.ts',
-    'src/aggregates/tasks/presenation/aggregate.ts',
-    'src/public/contact/presenation/contact.ts',
-    'src/relays/task-events/presenation/relay.ts',
-    'src/presence/domain/aggregates/presence/presence.aggregate.ts',
-  ];
-  const importingOwner: string = 'src/routes/auth/application/models/session/session.model.ts';
+it('does not accept a foreign use case referenced through an alias as HTTP delegation', () => {
   const findings: readonly ArchitectureFinding[] = withProject(
     {
+      ...STRICT_HTTP_GATEWAY,
+      [MIRROR_CONTROLLER]: (STRICT_HTTP_GATEWAY[MIRROR_CONTROLLER] ?? '').replace(
+        "import { GetMe as ReadCurrentUser } from '@me/application/use-cases/queries/users/get-me/get-me.use-case.js';",
+        "import { GetTaskDetail as ReadCurrentUser } from '../../../../../task-detail/application/use-cases/queries/lifecycle/get-task-detail/get-task-detail.use-case.js';",
+      ),
+    },
+    'gateway',
+    [],
+    'strict',
+  );
+
+  expect(findings).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ file: MIRROR_CONTROLLER, rule: 'intermodule-private' }),
+      expect.objectContaining({ file: MIRROR_CONTROLLER, rule: 'strict-http-use-case' }),
+    ]),
+  );
+});
+
+it('rejects the former root and nested owners only in strict gateway mode', () => {
+  const legacyPaths: readonly string[] = [
+    'src/connection/presentation/websocket/connection.ts',
+    'src/routes/auth/presentation/http/auth.ts',
+    'src/aggregates/tasks/application/task.ts',
+    'src/public/contact/presentation/http/contact.ts',
+    'src/relays/task-events/presentation/messaging/relay.ts',
+  ];
+  const sources: Readonly<Record<string, string>> = Object.fromEntries(
+    legacyPaths.map((file) => [file, 'export {};']),
+  );
+  expect(withProject(sources, 'gateway')).toEqual([]);
+  expect(withProject(sources, 'gateway', [], 'strict')).toEqual(
+    expect.arrayContaining(
+      legacyPaths.map((file) => expect.objectContaining({ file, rule: 'strict-ownership' })),
+    ),
+  );
+});
+
+it('finds unknown layers, keeps Auth private from AuthRoutes and rejects a gateway domain', () => {
+  const unknownLayers: readonly string[] = [
+    ME_ROOT + '/presenation/route.ts',
+    'src/modules/presence/domain/aggregates/presence/presence.aggregate.ts',
+  ];
+  const importingOwner: string =
+    'src/modules/auth-routes/application/models/session/session.model.ts';
+  const findings: readonly ArchitectureFinding[] = withProject(
+    {
+      ...STRICT_HTTP_GATEWAY,
       ...Object.fromEntries(unknownLayers.map((file) => [file, 'export {};'])),
       'src/utils/unowned.ts': 'export const unowned = 1;',
-      'src/auth/application/models/session/private-session.model.ts':
+      'src/modules/auth/application/models/session/private-session.model.ts':
         'export interface PrivateSession { readonly id: string; }',
       [importingOwner]: [
-        "import type { PrivateSession } from '../../../../../auth/application/models/session/private-session.model.js';",
+        "import type { PrivateSession } from '../../../../auth/application/models/session/private-session.model.js';",
         'export type Session = PrivateSession;',
       ].join('\n'),
     },
@@ -743,35 +897,62 @@ it('finds unknown layers under each nested gateway owner and distinguishes route
   );
 });
 
-it('accepts realtime entry points and a shared redis adapter without a business domain', () => {
+it('requires a manifest and root Nest wiring even for an adapter-only gateway module', () => {
+  const findings: readonly ArchitectureFinding[] = withProject(
+    {
+      'src/modules/presence/infrastructure/adapters/redis/redis-presence.adapter.ts':
+        'export class RedisPresenceAdapter {}',
+    },
+    'gateway',
+    [],
+    'strict',
+  );
+
+  expect(findings).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ rule: 'module-contract' }),
+      expect.objectContaining({
+        file: 'src/modules/presence/presence.module.ts',
+        rule: 'module-wiring',
+      }),
+    ]),
+  );
+});
+
+it('accepts realtime modules and a shared redis adapter without a business domain', () => {
   const sources: Readonly<Record<string, string>> = {
     'src/realtime-application.ts': "import './infrastructure/redis/redis-io.adapter.js';",
     'src/infrastructure/redis/redis-io.adapter.ts': [
       "import type { ResilientRedisClient } from '@cadenway/nest-common/redis';",
       'export class RedisIoAdapter { constructor(private readonly redis: ResilientRedisClient) {} }',
     ].join('\n'),
-    'src/connection/presentation/websocket/gateways/tasks/task-room.gateway.ts': [
+    'src/modules/connection/MODULE.md': MODULE_DOC,
+    'src/modules/connection/presentation/websocket/gateways/tasks/task-room.gateway.ts': [
       "import { WebSocketGateway } from '@nestjs/websockets';",
       '@WebSocketGateway() export class TaskRoomGateway {}',
     ].join('\n'),
-    'src/connection/connection.module.ts': [
+    'src/modules/connection/connection.module.ts': [
       "import { Module } from '@nestjs/common';",
       "import { TaskRoomGateway } from './presentation/websocket/gateways/tasks/task-room.gateway.js';",
       '@Module({ providers: [TaskRoomGateway] }) export class ConnectionModule {}',
     ].join('\n'),
-    'src/relays/task-events/presentation/messaging/handlers/tasks/task-changed.handler.ts': [
+    'src/modules/tasks-relay/MODULE.md': MODULE_DOC,
+    'src/modules/tasks-relay/presentation/messaging/handlers/tasks/task-changed.handler.ts': [
       "import { Injectable } from '@nestjs/common';",
       "import { EventConsumers } from '@cadenway/nest-messaging';",
       '@Injectable() export class TaskChangedHandler {',
       '  constructor(private readonly consumers: EventConsumers) {}',
       '}',
     ].join('\n'),
-    'src/relays/task-events/task-events.module.ts': [
+    'src/modules/tasks-relay/tasks-relay.module.ts': [
       "import { Module } from '@nestjs/common';",
       "import { TaskChangedHandler } from './presentation/messaging/handlers/tasks/task-changed.handler.js';",
-      '@Module({ providers: [TaskChangedHandler] }) export class TaskEventsModule {}',
+      '@Module({ providers: [TaskChangedHandler] }) export class TasksRelayModule {}',
     ].join('\n'),
-    'src/presence/infrastructure/adapters/redis/redis-presence.adapter.ts': [
+    'src/modules/presence/MODULE.md': MODULE_DOC,
+    'src/modules/presence/presence.module.ts':
+      'import { Module } from "@nestjs/common"; @Module({}) export class PresenceModule {}',
+    'src/modules/presence/infrastructure/adapters/redis/redis-presence.adapter.ts': [
       "import type { ResilientRedisClient } from '@cadenway/nest-common/redis';",
       'export class RedisPresenceAdapter { constructor(private readonly redis: ResilientRedisClient) {} }',
     ].join('\n'),

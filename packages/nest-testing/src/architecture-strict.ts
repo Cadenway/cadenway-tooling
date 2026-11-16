@@ -43,9 +43,7 @@ const LAYERS: ReadonlySet<string> = new Set([
 ]);
 
 // Resolve the owner independently of the layer so a misspelling cannot hide source.
-const SERVICE_OWNER = /^src\/modules\/([^/]+)\//u;
-const NESTED_GATEWAY_OWNER = /^src\/((?:routes|aggregates|public|relays)\/[^/]+)\//u;
-const GATEWAY_OWNER = /^src\/(auth|rate-limit|connection|presence)\//u;
+const MODULE_OWNER = /^src\/modules\/([^/]+)\//u;
 const TECHNICAL_SOURCE =
   /^src\/(?:main\.ts$|app\.module\.ts$|telemetry\.ts$|(?:config|infrastructure|health)\/)/u;
 const GATEWAY_TECHNICAL_SOURCE =
@@ -128,16 +126,12 @@ const ROLE_HINTS: Readonly<Partial<Record<Layer, string>>> = {
 };
 
 /** Finds the strict module boundary of an authored path. */
-export function strictOwnerOf(file: string, profile: StrictProfile): StrictOwner | undefined {
-  const match =
-    profile === 'service'
-      ? SERVICE_OWNER.exec(file)
-      : (NESTED_GATEWAY_OWNER.exec(file) ?? GATEWAY_OWNER.exec(file));
-  const name = match?.[1];
+export function strictOwnerOf(file: string): StrictOwner | undefined {
+  const name = MODULE_OWNER.exec(file)?.[1];
   if (!name) return undefined;
 
-  const root = profile === 'service' ? `src/modules/${name}` : `src/${name}`;
-  const wiring = `${root}/${name.split('/').at(-1)}.module.ts`;
+  const root = `src/modules/${name}`;
+  const wiring = `${root}/${name}.module.ts`;
   const tail = file.slice(root.length + 1);
   const first = tail.split('/')[0] ?? '';
   const layer =
@@ -175,6 +169,15 @@ function isUseCaseRole(path: string): boolean {
       path,
     );
   return match !== null && match[1] === match[2];
+}
+
+/** Identifies a use case owned by the same module as the caller. */
+export function isStrictLocalUseCase(file: string, owner: StrictOwner): boolean {
+  return (
+    file.startsWith(`${owner.root}/`) &&
+    file.endsWith('.use-case.ts') &&
+    isUseCaseRole(pathIn(file, owner))
+  );
 }
 
 function hasRolePath(path: string, layer: Layer): boolean {
@@ -264,9 +267,7 @@ export function checkStrictSource(
 
   if (!owner) {
     if (!isTechnicalSource(file, profile)) {
-      const expected =
-        profile === 'service' ? 'src/modules/<module>/' : 'a declared gateway capability folder';
-      report('strict-ownership', `Place ${file} under ${expected}.`);
+      report('strict-ownership', `Place ${file} under src/modules/<module>/.`);
     } else if (!test && REQUIRES_WIRING.test(file) && !file.startsWith('src/health/')) {
       report(
         'strict-ownership',
@@ -283,7 +284,7 @@ export function checkStrictSource(
   if (owner.layer === 'unknown') {
     report(
       'strict-layer',
-      'Use an explicit domain/, application/, presentation/, infrastructure/, composition/ or public/ layer. Replace api/ with presentation/.',
+      'Use one of the four layer folders: domain/, application/, presentation/ or infrastructure/. Use composition/ for separate wiring files and public/ for declared entries. Replace api/ with presentation/.',
     );
     return;
   }
@@ -307,7 +308,10 @@ export function checkStrictSource(
       'Place incoming entry points in presentation/<transport>/<role>/<area>/.',
     );
   } else if (COMPOSITION_FILE.test(path) && owner.layer !== 'composition') {
-    report('strict-layout', 'Place provider and token declarations in composition/.');
+    report(
+      'strict-layout',
+      'Declare wiring inline in the root Nest module or put separate provider and token files in composition/.',
+    );
   } else if (path.startsWith('application/ports/') && !OUTBOUND_PORT.test(path)) {
     report(
       'strict-port',
@@ -317,11 +321,6 @@ export function checkStrictSource(
     report('strict-layout', `Place ${path} under ${ROLE_HINTS[owner.layer]}.`);
   }
   if (owner.layer !== 'public') checkNamedContracts(ast, path, report);
-}
-
-/** States whether an authored capability source belongs to the Nest component graph. */
-export function needsStrictWiring(file: string, owner: StrictOwner): boolean {
-  return owner.layer === 'composition' || owner.layer === 'public' || REQUIRES_WIRING.test(file);
 }
 
 function isComposition(layer: Layer): boolean {
@@ -391,12 +390,9 @@ function permitsForeignDependency(
 function permitsLocalDependency(
   source: StrictOwner,
   target: StrictOwner,
-  sourcePath: string,
   targetPath: string,
   edge: StrictImportEdge,
   profile: StrictProfile,
-  mirrorPorts: Set<string>,
-  report: Report,
 ): boolean {
   if (source.layer === 'wiring') return target.layer !== 'unknown';
   if (source.layer === 'composition')
@@ -417,33 +413,7 @@ function permitsLocalDependency(
         (OUTBOUND_PORT.test(targetPath) || (edge.typeOnly && APPLICATION_ENTRY.test(targetPath))))
     );
   }
-  if (source.layer !== 'presentation') return false;
-  if (APPLICATION_ENTRY.test(targetPath)) return true;
-
-  // A route which only forwards a request can inject its own port, but cannot import its adapter.
-  const mirror =
-    profile === 'gateway' &&
-    /^(?:routes|public)\//u.test(source.name) &&
-    sourcePath.endsWith('.controller.ts');
-  if (
-    !mirror ||
-    !((edge.typeOnly && OUTBOUND_PORT.test(targetPath)) || LOCAL_TOKEN.test(targetPath))
-  ) {
-    return false;
-  }
-  const name = targetPath
-    .split('/')
-    .at(-1)
-    ?.replace(/\.(?:port|token)\.ts$/u, '');
-  if (name) mirrorPorts.add(name);
-  if (mirrorPorts.size > 1) {
-    report(
-      'strict-mirror-port',
-      'A mirror controller can inject one outbound port. Move orchestration into an application use case.',
-      edge.line,
-    );
-  }
-  return true;
+  return source.layer === 'presentation' && APPLICATION_ENTRY.test(targetPath);
 }
 
 interface StrictImportOptions {
@@ -453,14 +423,13 @@ interface StrictImportOptions {
   readonly owner: StrictOwner | undefined;
   readonly edge: StrictImportEdge;
   readonly target: string | undefined;
-  readonly mirrorPorts: Set<string>;
   readonly report: Report;
 }
 
 /** Checks one resolved dependency against the strict ownership and layer rules. */
 export function checkStrictImport(options: StrictImportOptions): void {
-  const { rootDir, profile, source, owner, edge, target, mirrorPorts, report } = options;
-  const targetOwner = target ? strictOwnerOf(target, profile) : undefined;
+  const { rootDir, profile, source, owner, edge, target, report } = options;
+  const targetOwner = target ? strictOwnerOf(target) : undefined;
   const local = target?.startsWith('src/') === true;
   const resolvedPackage = packageAt(target);
   const matchesPackage = (pattern: RegExp): boolean =>
@@ -553,18 +522,7 @@ export function checkStrictImport(options: StrictImportOptions): void {
     return;
   }
 
-  if (
-    !permitsLocalDependency(
-      owner,
-      targetOwner,
-      pathIn(source, owner),
-      entry,
-      edge,
-      profile,
-      mirrorPorts,
-      report,
-    )
-  ) {
+  if (!permitsLocalDependency(owner, targetOwner, entry, edge, profile)) {
     report(
       'layer-direction',
       `${owner.layer} cannot import ${target}. Follow the dependency direction of the capability layers.`,
