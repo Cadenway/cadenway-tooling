@@ -38,7 +38,7 @@
     "typescript": "catalog:"
   },
   "peerDependencies": {
-    "@cadenway/nest-messaging": "^0.0.1",
+    "@cadenway/nest-messaging": "^0.0.1 || ^0.2.0",
     "@nestjs/testing": "catalog:",
     "drizzle-orm": "catalog:",
     "pg": "catalog:",
