@@ -30,7 +30,8 @@
     "build": "tsc -p tsconfig.build.json"
   },
   "dependencies": {
-    "@testcontainers/nats": "^12.2.1",
+    "@nats-io/jetstream": "^3.4.0",
+    "@nats-io/transport-node": "^3.4.0",
     "@testcontainers/postgresql": "^12.2.1",
     "@testcontainers/redis": "^12.2.1",
     "msw": "^3.0.5",
@@ -38,7 +39,9 @@
     "typescript": "catalog:"
   },
   "peerDependencies": {
-    "@cadenway/nest-messaging": "^0.0.1",
+    "@cadenway/contracts": ">=0.2.0 <1.0.0",
+    "@cadenway/nest-common": ">=0.2.0 <1.0.0",
+    "@cadenway/nest-messaging": ">=0.0.1 <1.0.0",
     "@nestjs/testing": "catalog:",
     "drizzle-orm": "catalog:",
     "pg": "catalog:",
@@ -46,6 +49,12 @@
     "vitest": "catalog:"
   },
   "peerDependenciesMeta": {
+    "@cadenway/contracts": {
+      "optional": true
+    },
+    "@cadenway/nest-common": {
+      "optional": true
+    },
     "@cadenway/nest-messaging": {
       "optional": true
     },
@@ -57,11 +66,23 @@
     }
   },
   "devDependencies": {
+    "@cadenway/contracts": "^0.2.0",
+    "@cadenway/nest-common": "^0.3.0",
+    "@cadenway/nest-messaging": "^0.1.0",
+    "@nestjs/common": "^12.4.2",
+    "@nestjs/core": "^12.4.2",
+    "@nestjs/platform-express": "^12.4.2",
     "@nestjs/testing": "catalog:",
+    "@opentelemetry/api": "^1.10.0",
     "@types/node": "catalog:",
+    "@types/pg": "^8.23.1",
+    "@types/supertest": "^7.2.1",
     "drizzle-orm": "catalog:",
     "pg": "catalog:",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2",
     "supertest": "catalog:",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "zod": "^4.6.7"
   }
 }
