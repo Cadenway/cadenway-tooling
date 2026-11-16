@@ -22,3 +22,8 @@ The package names and exports are unchanged. Changesets versions releases and th
 4. After the Changesets release, grant consumer repositories Actions read access to `@cadenway/angular-testing`. Update each consumer's development dependency through pnpm and commit its generated lockfile. Run `pnpm install --frozen-lockfile` and `pnpm test:architecture`, then add the architecture check to its quality script and CI in the same change. Keep local exceptions beside each consumer's suite.
 
 The Nest package's optional messaging peer resolves from the published service kit. Runtime packages and the [hexagonal architecture guide](https://github.com/Cadenway/cadenway-service-kit/blob/main/docs/hexagonal-architecture.md) remain owned by the service kit.
+
+The V2 Nest verifier is an opt-in change. Release `@cadenway/nest-testing` before editing consumer
+dependency pins or enabling `convention: 'strict'`. Adopt it in services first, then in both
+gateways. The strict suite fails on every finding, including existing deviations. Deliver source
+layout and wiring corrections separately from the verifier and its documentation.

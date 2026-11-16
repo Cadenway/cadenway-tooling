@@ -3,6 +3,17 @@ import { isAbsolute, relative, resolve } from 'node:path';
 
 import ts from 'typescript';
 
+import { verifyStrictPublicContracts } from './architecture-public-contracts.js';
+import {
+  checkStrictImport,
+  checkStrictSource,
+  isStrictGenerated,
+  isStrictLocalUseCase,
+  strictOwnerOf,
+  type StrictOwner,
+  type StrictProfile,
+} from './architecture-strict.js';
+
 /**
  * Interface ArchitectureFinding
  *
@@ -142,6 +153,12 @@ export interface NestArchitectureOptions {
   readonly profile: 'service' | 'gateway' | 'kit';
 
   /**
+   * Opt in to the v2 service or gateway layout, dependency rules and public contracts.
+   * Strict checks do not support file exceptions.
+   */
+  readonly convention?: 'strict';
+
+  /**
    * Property exceptions
    *
    * @description
@@ -194,6 +211,12 @@ interface ImportEdge {
    * @readonly
    */
   readonly runtime: boolean;
+
+  /** Whether this reference only imports TypeScript types. */
+  readonly typeOnly: boolean;
+
+  /** Whether the source uses a static import with explicit member names. */
+  readonly namedImport: boolean;
 
   /**
    * Property mode
@@ -421,51 +444,73 @@ function lineOf(ast: ts.SourceFile, node: ts.Node): number {
  * @param {ts.CompilerOptions} compiler - Repository module resolution configuration.
  * @returns {readonly ImportEdge[]} Direct dependency edges.
  */
-function readEdges(ast: ts.SourceFile, compiler: ts.CompilerOptions): readonly ImportEdge[] {
+function readEdges(
+  ast: ts.SourceFile,
+  compiler: ts.CompilerOptions,
+  onComputedReference?: (line: number) => void,
+): readonly ImportEdge[] {
   const edges: ImportEdge[] = [];
 
-  const add: (node: ts.Node | undefined, runtime: boolean) => void = (node, runtime) => {
+  const add = (
+    node: ts.Node | undefined,
+    runtime: boolean,
+    typeOnly = false,
+    namedImport = false,
+  ): void => {
     if (node && ts.isStringLiteralLike(node)) {
       const mode: ts.ResolutionMode = ts.getModeForUsageLocation(ast, node, compiler);
-      edges.push({ specifier: node.text, line: lineOf(ast, node), runtime, mode });
+      edges.push({
+        specifier: node.text,
+        line: lineOf(ast, node),
+        runtime,
+        typeOnly,
+        namedImport,
+        mode,
+      });
     }
+  };
+
+  const addCall = (call: ts.CallExpression, runtime: boolean): void => {
+    const arg = call.arguments[0];
+    if (arg && ts.isStringLiteralLike(arg)) add(arg, runtime);
+    else onComputedReference?.(lineOf(ast, call));
   };
 
   const visit: (node: ts.Node) => void = (node) => {
     if (ts.isImportDeclaration(node)) {
       const clause: ts.ImportClause | undefined = node.importClause;
       const members: ts.NamedImportBindings | undefined = clause?.namedBindings;
-      add(
-        node.moduleSpecifier,
+      const runtime =
         clause?.phaseModifier !== ts.SyntaxKind.TypeKeyword &&
-          (!clause ||
-            clause.name !== undefined ||
-            !members ||
-            ts.isNamespaceImport(members) ||
-            members.elements.length === 0 ||
-            members.elements.some((element) => !element.isTypeOnly)),
-      );
+        (!clause ||
+          clause.name !== undefined ||
+          !members ||
+          ts.isNamespaceImport(members) ||
+          members.elements.length === 0 ||
+          members.elements.some((element) => !element.isTypeOnly));
+      const namedImport =
+        !clause?.name && !!members && ts.isNamedImports(members) && members.elements.length > 0;
+      add(node.moduleSpecifier, runtime, !runtime, namedImport);
     } else if (ts.isExportDeclaration(node)) {
       const clause: ts.NamedExportBindings | undefined = node.exportClause;
-      add(
-        node.moduleSpecifier,
+      const runtime =
         !node.isTypeOnly &&
-          (!clause ||
-            ts.isNamespaceExport(clause) ||
-            clause.elements.length === 0 ||
-            clause.elements.some((element) => !element.isTypeOnly)),
-      );
+        (!clause ||
+          ts.isNamespaceExport(clause) ||
+          clause.elements.length === 0 ||
+          clause.elements.some((element) => !element.isTypeOnly));
+      add(node.moduleSpecifier, runtime, !runtime);
     } else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)) {
-      add(node.argument.literal, false);
+      add(node.argument.literal, false, true);
     } else if (
       ts.isImportEqualsDeclaration(node) &&
       ts.isExternalModuleReference(node.moduleReference)
     ) {
-      add(node.moduleReference.expression, !node.isTypeOnly);
+      add(node.moduleReference.expression, !node.isTypeOnly, node.isTypeOnly);
     } else if (ts.isCallExpression(node)) {
-      if (node.expression.kind === ts.SyntaxKind.ImportKeyword) add(node.arguments[0], false);
+      if (node.expression.kind === ts.SyntaxKind.ImportKeyword) addCall(node, false);
       if (ts.isIdentifier(node.expression) && node.expression.text === 'require')
-        add(node.arguments[0], true);
+        addCall(node, true);
     }
     ts.forEachChild(node, visit);
   };
@@ -600,6 +645,7 @@ function isLocalSpecifier(specifier: string): boolean {
 function sourceFiles(
   options: NestArchitectureOptions,
   compiler: ts.CompilerOptions,
+  strict: StrictProfile | undefined,
 ): readonly SourceUnit[] {
   const directories: readonly string[] = options.profile === 'kit' ? ['packages'] : ['src', 'test'];
   const includes: readonly string[] | undefined =
@@ -610,10 +656,14 @@ function sourceFiles(
         .readDirectory(
           resolve(options.rootDir, directory),
           ['.ts', '.mts', '.cts'],
-          SOURCE_EXCLUDES,
+          strict ? SOURCE_EXCLUDES.filter((entry) => entry !== '**/generated/**') : SOURCE_EXCLUDES,
           includes,
         )
-        .filter((path) => !/\.d\.[cm]?ts$/u.test(path))
+        .filter((path) => strict || !/\.d\.[cm]?ts$/u.test(path))
+        .filter(
+          (path) =>
+            !strict || !isStrictGenerated(normalizePath(relative(options.rootDir, path)), strict),
+        )
         .map((path) => ({
           path,
           file: normalizePath(relative(options.rootDir, path)),
@@ -706,6 +756,112 @@ function decoratorName(decorator: ts.Decorator, ast: ts.SourceFile): string | un
   return undefined;
 }
 
+const HTTP_ROUTE_DECORATORS: ReadonlySet<string> = new Set([
+  'All',
+  'Copy',
+  'Delete',
+  'Get',
+  'Head',
+  'Lock',
+  'Mkcol',
+  'Move',
+  'Options',
+  'Patch',
+  'Post',
+  'Propfind',
+  'Proppatch',
+  'Put',
+  'QueryMethod',
+  'RequestMapping',
+  'Search',
+  'Sse',
+  'Unlock',
+]);
+
+function delegatesToUseCase(
+  method: ts.MethodDeclaration,
+  rootDir: string,
+  owner: StrictOwner,
+  checker: ts.TypeChecker,
+): boolean {
+  const visited = new Set<ts.MethodDeclaration>();
+
+  function inspect(candidate: ts.MethodDeclaration): true | undefined {
+    if (!candidate.body || visited.has(candidate)) return undefined;
+    visited.add(candidate);
+    return visit(candidate.body);
+  }
+
+  function visit(node: ts.Node): true | undefined {
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
+      const member = node.expression;
+      if (member.name.text === 'execute') {
+        const declarations = checker.getTypeAtLocation(member.expression).getSymbol()?.declarations;
+        if (
+          declarations?.some(
+            (declaration) =>
+              ts.isClassDeclaration(declaration) &&
+              isStrictLocalUseCase(
+                normalizePath(relative(rootDir, declaration.getSourceFile().fileName)),
+                owner,
+              ),
+          )
+        )
+          return true;
+      }
+
+      // A route can delegate through a controller-local helper.
+      if (member.expression.kind === ts.SyntaxKind.ThisKeyword) {
+        const helper = checker.getSymbolAtLocation(member.name)?.valueDeclaration;
+        if (
+          helper &&
+          ts.isMethodDeclaration(helper) &&
+          helper.parent === method.parent &&
+          inspect(helper)
+        ) {
+          return true;
+        }
+      }
+    }
+    return ts.forEachChild(node, visit);
+  }
+
+  return inspect(method) === true;
+}
+
+function checkStrictHttpRoutes(
+  ast: ts.SourceFile,
+  owner: StrictOwner,
+  rootDir: string,
+  checker: ts.TypeChecker,
+  report: Report,
+): void {
+  for (const statement of ast.statements) {
+    if (
+      !ts.isClassDeclaration(statement) ||
+      !ts
+        .getDecorators(statement)
+        ?.some((decorator) => decoratorName(decorator, ast) === 'Controller')
+    )
+      continue;
+
+    for (const member of statement.members) {
+      if (!ts.isMethodDeclaration(member)) continue;
+      const route = ts.getDecorators(member)?.find((decorator) => {
+        const name = decoratorName(decorator, ast);
+        return name !== undefined && HTTP_ROUTE_DECORATORS.has(name);
+      });
+      if (route && !delegatesToUseCase(member, rootDir, owner, checker)) {
+        report(
+          'strict-http-use-case',
+          'Each HTTP route must call execute() on a use case in its own module, including a single-call mirror.',
+          lineOf(ast, route),
+        );
+      }
+    }
+  }
+}
+
 /**
  * Type Report
  *
@@ -734,6 +890,7 @@ function checkFile(
   fileNames: ReadonlySet<string>,
   options: NestArchitectureOptions,
   report: Report,
+  strict = false,
 ): void {
   const parts: readonly string[] = unit.file.split('/');
   if (parts.some((segment) => segment.split('.').some((part) => !KEBAB_PART.test(part)))) {
@@ -752,6 +909,7 @@ function checkFile(
   if (unit.file.startsWith('test/') && /\.spec\.[cm]?ts$/u.test(unit.file)) {
     report('cross-layer-spec', 'Use the .int-spec.ts suffix for cross-layer tests in test/.');
   }
+  if (strict) return;
 
   if (!owner) {
     // The process entry points: `main.ts`, `migrate.ts` and `telemetry.ts`, which
@@ -854,7 +1012,12 @@ function checkFile(
  * @param {ModuleOwner | undefined} owner - Business module ownership, if applicable.
  * @param {Report} report - Finding collector for the current file.
  */
-function checkDeclaration(unit: SourceUnit, owner: ModuleOwner | undefined, report: Report): void {
+function checkDeclaration(
+  unit: SourceUnit,
+  owner: ModuleOwner | undefined,
+  report: Report,
+  strict = false,
+): void {
   for (const statement of unit.ast.statements) {
     if (
       ts.isExportDeclaration(statement) &&
@@ -871,6 +1034,13 @@ function checkDeclaration(unit: SourceUnit, owner: ModuleOwner | undefined, repo
         report(
           'nest-role-naming',
           `Name this Nest declaration file <name>.${role}.ts.`,
+          lineOf(unit.ast, decorator),
+        );
+      }
+      if (strict && name === 'Global' && unit.file === 'src/clients/clients.module.ts') {
+        report(
+          'module-wiring',
+          'Import ClientsModule explicitly in capabilities. Bind the capability ports in their own composition.',
           lineOf(unit.ast, decorator),
         );
       }
@@ -960,6 +1130,7 @@ function checkImport(
   target: string | undefined,
   options: NestArchitectureOptions,
   report: Report,
+  strict = false,
 ): void {
   const specifier: string = edge.specifier;
   const local: boolean =
@@ -995,6 +1166,7 @@ function checkImport(
   if (specifier === '@cadenway/nest-testing' || specifier.startsWith('@cadenway/nest-testing/')) {
     report('production-test-import', 'Use nest-testing only from test sources.', edge.line);
   }
+  if (strict) return;
 
   if (options.profile === 'kit') {
     const sourcePackage: string | undefined = unit.file.split('/')[1];
@@ -1161,6 +1333,76 @@ function findCycles(
   for (const file of graph.keys()) visit(file);
 }
 
+function strictProfileOf(options: NestArchitectureOptions): StrictProfile | undefined {
+  if (options.convention === undefined) return undefined;
+  if (options.convention !== 'strict') throw new Error('Unknown Nest architecture convention.');
+  if (options.profile !== 'service' && options.profile !== 'gateway') {
+    throw new Error(
+      'The strict Nest architecture convention requires the service or gateway profile.',
+    );
+  }
+  if (options.exceptions?.length) {
+    throw new Error('The strict Nest architecture convention does not allow file exceptions.');
+  }
+  return options.profile;
+}
+
+function checkStrictModules(
+  rootDir: string,
+  profile: StrictProfile,
+  sources: readonly SourceUnit[],
+  fileNames: ReadonlySet<string>,
+  compiler: ts.CompilerOptions,
+  report: (file: string, rule: string, message: string, line?: number) => void,
+): void {
+  const modules = new Map<string, StrictOwner>();
+  for (const { file } of sources) {
+    const owner = strictOwnerOf(file);
+    if (!owner || isTest(file)) continue;
+    if (!modules.has(owner.root)) modules.set(owner.root, owner);
+  }
+
+  for (const owner of modules.values()) {
+    if (!existsSync(resolve(rootDir, owner.root, 'MODULE.md'))) {
+      report(
+        owner.wiring,
+        'module-contract',
+        `Add ${owner.root}/MODULE.md to describe the owning module.`,
+      );
+    }
+    if (!fileNames.has(owner.wiring)) {
+      report(
+        owner.wiring,
+        'module-wiring',
+        `Add ${owner.wiring} as the capability composition root.`,
+      );
+    }
+  }
+  if (!modules.size) return;
+
+  const program = ts.createProgram(
+    sources.map(({ path }) => path),
+    compiler,
+  );
+  const checker = program.getTypeChecker();
+  for (const { file, path } of sources) {
+    if (!file.endsWith('.controller.ts')) continue;
+    const owner = strictOwnerOf(file);
+    const ast = program.getSourceFile(path);
+    if (!ast || owner?.layer !== 'presentation') continue;
+    checkStrictHttpRoutes(ast, owner, rootDir, checker, (rule, message, line) =>
+      report(file, rule, message, line),
+    );
+  }
+  verifyStrictPublicContracts({
+    rootDir,
+    profile,
+    program,
+    modules: [...modules.values()],
+    report,
+  });
+}
+
 /**
  * Function verifyNestArchitecture
  *
@@ -1173,11 +1415,15 @@ function findCycles(
 export function verifyNestArchitecture(
   options: NestArchitectureOptions,
 ): readonly ArchitectureFinding[] {
+  const strict = strictProfileOf(options);
   const compiler: ts.CompilerOptions = readCompilerOptions(options);
-  const sources: readonly SourceUnit[] = sourceFiles(options, compiler);
+  const sources: readonly SourceUnit[] = sourceFiles(options, compiler, strict);
   if (!sources.length) throw new Error(`No authored sources found in ${options.rootDir}`);
   const fileNames: ReadonlySet<string> = new Set(sources.map((unit) => unit.file));
   const findings: ArchitectureFinding[] = [];
+  const reportFinding = (file: string, rule: string, message: string, line = 1): void => {
+    findings.push({ file, line, rule, message });
+  };
   const graph: Map<string, GraphEdge[]> = new Map<string, GraphEdge[]>();
   const cache: ts.ModuleResolutionCache = ts.createModuleResolutionCache(
     options.rootDir,
@@ -1186,15 +1432,24 @@ export function verifyNestArchitecture(
   );
 
   for (const unit of sources) {
-    const owner: ModuleOwner | undefined = getLayer(unit.file, options.profile);
-    const report: Report = (rule, message, line = 1) => {
-      findings.push({ file: unit.file, line, rule, message });
-    };
-    checkFile(unit, owner, fileNames, options, report);
+    const strictOwner = strict ? strictOwnerOf(unit.file) : undefined;
+    const owner = strict ? strictOwner : getLayer(unit.file, options.profile);
+    const report: Report = (rule, message, line) => reportFinding(unit.file, rule, message, line);
+    checkFile(unit, owner, fileNames, options, report, !!strict);
+    if (strict)
+      checkStrictSource(unit.file, unit.ast, strictOwner, strict, isTest(unit.file), report);
     if (isTest(unit.file)) continue;
-    checkDeclaration(unit, owner, report);
+    checkDeclaration(unit, owner, report, !!strict);
     const runtime: GraphEdge[] = [];
-    for (const edge of readEdges(unit.ast, compiler)) {
+    const onComputedReference = strict
+      ? (line: number) =>
+          report(
+            'computed-import',
+            'Use a literal path so the dependency direction can be checked.',
+            line,
+          )
+      : undefined;
+    for (const edge of readEdges(unit.ast, compiler, onComputedReference)) {
       const resolved: ts.ResolvedModuleFull | undefined = ts.resolveModuleName(
         edge.specifier,
         unit.path,
@@ -1206,7 +1461,18 @@ export function verifyNestArchitecture(
       ).resolvedModule;
       const target: string | undefined =
         resolved && normalizePath(relative(options.rootDir, resolved.resolvedFileName));
-      checkImport(unit, owner, edge, target, options, report);
+      checkImport(unit, owner, edge, target, options, report, !!strict);
+      if (strict) {
+        checkStrictImport({
+          rootDir: options.rootDir,
+          profile: strict,
+          source: unit.file,
+          owner: strictOwner,
+          edge,
+          target,
+          report,
+        });
+      }
       if (target && edge.runtime && fileNames.has(target) && !isTest(target)) {
         runtime.push({ target, line: edge.line });
       }
@@ -1214,6 +1480,8 @@ export function verifyNestArchitecture(
     graph.set(unit.file, runtime);
   }
   findCycles(graph, findings);
+  if (strict)
+    checkStrictModules(options.rootDir, strict, sources, fileNames, compiler, reportFinding);
 
   const exceptions: readonly ArchitectureException[] = options.exceptions ?? [];
   for (const exception of exceptions) {
