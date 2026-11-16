@@ -1,5 +1,11 @@
 # @cadenway/nest-testing
 
+## 0.5.1
+
+### Patch Changes
+
+- 3570682: Allow the optional `@cadenway/nest-messaging` peer at version 0.2 while retaining support for 0.0.1.
+
 ## 0.5.0
 
 ### Minor Changes
