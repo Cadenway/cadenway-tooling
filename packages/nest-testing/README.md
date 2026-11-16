@@ -25,6 +25,17 @@ Use `service` for a business service, `gateway` for an HTTP or realtime gateway,
 service-kit workspace. Findings carry repository-relative `file`, one-based `line`, `rule` and
 `message`.
 
+For `kit`, use `profile: 'kit', convention: 'strict'` in the same check. The verifier reads each
+package's declared exports and maps build outputs to authored sources. It checks package imports
+before a workspace build, rejects imports through private paths or aliases, and requires messaging
+to declare its production dependency on common. Messaging may depend on common. Common and jobs
+are independent of the other kit packages.
+
+The kit profile rejects test code in export targets or production imports and detects eager
+execution cycles. It follows imports through intermediate modules, including type imports: the
+jobs runtime accesses the shared schema contract directly, and the database reads request context
+independently of the internal token guard.
+
 For `service` and `gateway`, `convention: 'strict'` enables the V2 folder and dependency rules. It
 requires all authored modules and capabilities to follow the convention, including existing ones.
 Use `profile: 'gateway'` for both HTTP and realtime gateways. Both profiles identify capabilities

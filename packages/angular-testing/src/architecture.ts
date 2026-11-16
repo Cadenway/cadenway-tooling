@@ -1,20 +1,13 @@
 import { basename, dirname } from 'node:path';
+import { report, type ArchitectureFinding } from './diagnostics.js';
 import ts from 'typescript';
 import { applicationFindings } from './application.js';
 import { exportedNames, symbolOrigins } from './exports.js';
+import { findCycles } from './import-graph.js';
 import { isInternal, libraryFindings } from './library.js';
-import {
-  findCycles,
-  isTestFile,
-  isWithin,
-  report,
-  scanProject,
-  type ArchitectureFinding,
-  type Project,
-  type ProjectFile,
-} from './project.js';
+import { isTestFile, isWithin, scanProject, type Project, type ProjectFile } from './project.js';
 
-export type { ArchitectureFinding } from './project.js';
+export type { ArchitectureFinding } from './diagnostics.js';
 
 export interface ArchitectureException {
   readonly file: string;
