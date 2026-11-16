@@ -32,8 +32,15 @@ to declare its production dependency on common. Messaging may depend on common. 
 are independent of the other kit packages.
 
 The kit profile rejects test code in export targets or production imports and detects eager
-execution cycles. It follows imports through intermediate modules, including type imports: the
-jobs runtime accesses the shared schema contract directly, and the database reads request context
+execution cycles. The targets of the outbox `/writer`, `/relay` and `/schema` entries and the
+jobs `/runtime` and `/provisioning` entries belong to their respective source directories, including
+the targets of declaration exports. The verifier follows intermediate and type imports. The
+outbox writer and relay can share schema definitions and compose through the legacy façade.
+Schema definitions stay independent of writer, relay and wiring. The `/consumer/postgres` entry
+targets its public index for both JavaScript and declarations. The PostgreSQL deduplicator shares
+schema definitions with the outbox and stays independent of its writer and relay. Event delivery
+uses the deduplication port. The legacy outbox module can compose both sides during migration.
+Jobs runtime and provisioning can share the schema contract. The database reads request context
 independently of the internal token guard.
 
 For `service` and `gateway`, `convention: 'strict'` enables the V2 folder and dependency rules. It
@@ -45,6 +52,11 @@ controllers depend on a use case even for one-to-one routes. The gateway profile
 and transactional outbox code in services, restricts generated clients to their technical
 adapters, and supports explicitly published HTTP guards. Fixture tests run without starting Nest
 or any infrastructure.
+
+The strict service and gateway profiles check common, messaging and jobs imports against the
+Service Kit public entry list. The list includes the compatibility entries, telemetry hooks and
+the narrow outbox, PostgreSQL consumer and jobs entries. Use these published entries directly.
+When adding a new entry to a kit package, update the verifier's public entry list with it.
 
 `<module>.module.ts` can declare tokens and factory providers inline. The optional
 `composition/` directory holds wiring split into separate files. Strict verification accepts both.
