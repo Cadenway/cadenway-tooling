@@ -36,9 +36,12 @@ execution cycles. The targets of the outbox `/writer`, `/relay` and `/schema` en
 jobs `/runtime` and `/provisioning` entries belong to their respective source directories, including
 the targets of declaration exports. The verifier follows intermediate and type imports. The
 outbox writer and relay can share schema definitions and compose through the legacy façade.
-Schema definitions stay independent of writer, relay and wiring. Jobs runtime and provisioning
-can share the schema contract. The database reads request context independently of the internal
-token guard.
+Schema definitions stay independent of writer, relay and wiring. The `/consumer/postgres` entry
+targets its public index for both JavaScript and declarations. The PostgreSQL deduplicator shares
+schema definitions with the outbox and stays independent of its writer and relay. Event delivery
+uses the deduplication port. The legacy outbox module can compose both sides during migration.
+Jobs runtime and provisioning can share the schema contract. The database reads request context
+independently of the internal token guard.
 
 For `service` and `gateway`, `convention: 'strict'` enables the V2 folder and dependency rules. It
 requires all authored modules and capabilities to follow the convention, including existing ones.
@@ -52,8 +55,8 @@ or any infrastructure.
 
 The strict service and gateway profiles check common, messaging and jobs imports against the
 Service Kit public entry list. The list includes the compatibility entries, telemetry hooks and
-the narrow outbox and jobs entries. Use these published entries directly. When adding a new
-entry to a kit package, update the verifier's public entry list with it.
+the narrow outbox, PostgreSQL consumer and jobs entries. Use these published entries directly.
+When adding a new entry to a kit package, update the verifier's public entry list with it.
 
 `<module>.module.ts` can declare tokens and factory providers inline. The optional
 `composition/` directory holds wiring split into separate files. Strict verification accepts both.

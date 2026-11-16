@@ -253,6 +253,7 @@ it('resolves the declared strict kit entries before building any kit package', (
 
 const OUTBOX_SUBPATHS = {
   '.': './dist/index.js',
+  './consumer/postgres': './dist/consumer/postgres/index.js',
   './outbox': './dist/outbox/index.js',
   './outbox/writer': './dist/outbox/writer/index.js',
   './outbox/relay': './dist/outbox/relay/index.js',
@@ -277,6 +278,14 @@ const KIT_SUBPATHS: Readonly<Record<string, string>> = {
     "export { write } from './writer/index.js';",
     "export { relay } from './relay/index.js';",
     "export { schema } from './schema/index.js';",
+    "export { deduplicate } from '../consumer/postgres/index.js';",
+  ].join('\n'),
+  'packages/nest-messaging/src/consumer/delivery/deduplication.port.ts':
+    'export type Deduplicate = () => number;',
+  'packages/nest-messaging/src/consumer/postgres/index.ts': [
+    "import { schema } from '../../outbox/schema/index.js';",
+    "import type { Deduplicate } from '../delivery/deduplication.port.js';",
+    'export const deduplicate: Deduplicate = () => schema;',
   ].join('\n'),
   'packages/nest-messaging/src/outbox/writer/index.ts':
     "export { schema as write } from '../schema/index.js';",
@@ -335,6 +344,38 @@ it('requires both runtime and type export targets to belong to the declared name
   ]);
 });
 
+it('requires the PostgreSQL consumer entry to point to its public index', () => {
+  const findings = withProject(
+    {
+      ...KIT_SUBPATHS,
+      'packages/nest-messaging/package.json': JSON.stringify({
+        name: '@cadenway/nest-messaging',
+        type: 'module',
+        exports: {
+          ...OUTBOX_SUBPATHS,
+          './consumer/postgres': {
+            types: './dist/consumer/postgres/index.d.ts',
+            default: './dist/consumer/postgres/adapter.js',
+          },
+        },
+        peerDependencies: { '@cadenway/nest-common': 'workspace:^' },
+      }),
+      'packages/nest-messaging/src/consumer/postgres/adapter.ts': 'export const internal = 1;',
+    },
+    'kit',
+    [],
+    'strict',
+  );
+
+  expect(findings).toEqual([
+    expect.objectContaining({
+      file: 'packages/nest-messaging/package.json',
+      rule: 'kit-package-namespace',
+      message: expect.stringContaining('src/consumer/postgres/index.ts'),
+    }),
+  ]);
+});
+
 it('keeps narrow entries isolated through re-exports, deferred imports and type imports', () => {
   const findings = withProject(
     {
@@ -365,6 +406,10 @@ it('keeps narrow entries isolated through re-exports, deferred imports and type 
       rule: 'kit-provisioning-runtime',
     }),
     expect.objectContaining({
+      file: 'packages/nest-messaging/src/consumer/postgres/index.ts',
+      rule: 'kit-consumer-postgres-outbox',
+    }),
+    expect.objectContaining({
       file: 'packages/nest-messaging/src/outbox/relay/index.ts',
       rule: 'kit-outbox-relay-writer',
     }),
@@ -376,6 +421,50 @@ it('keeps narrow entries isolated through re-exports, deferred imports and type 
       file: 'packages/nest-messaging/src/outbox/writer/index.ts',
       rule: 'kit-outbox-writer-relay',
     }),
+  ]);
+});
+
+it.each([
+  {
+    file: 'outbox/writer/index.ts',
+    source: "export { deduplicate } from '../lookup.js';",
+    rule: 'kit-outbox-consumer-postgres',
+  },
+  {
+    file: 'outbox/relay/index.ts',
+    source: "export const relay = () => import('../../consumer/postgres/index.js');",
+    rule: 'kit-outbox-consumer-postgres',
+  },
+  {
+    file: 'consumer/postgres/index.ts',
+    source: "export { write as deduplicate } from '../../outbox/writer/index.js';",
+    rule: 'kit-consumer-postgres-outbox',
+  },
+  {
+    file: 'consumer/postgres/index.ts',
+    source: "export { relay as deduplicate } from '../../outbox/relay/index.js';",
+    rule: 'kit-consumer-postgres-outbox',
+  },
+  {
+    file: 'consumer/event-consumers.ts',
+    source: "export { deduplicate } from './postgres/index.js';",
+    rule: 'kit-consumer-postgres-implementation',
+  },
+])('rejects a PostgreSQL deduplication boundary violation in $file ($rule)', (scenario) => {
+  const path = 'packages/nest-messaging/src/';
+  const findings = withProject(
+    {
+      ...KIT_SUBPATHS,
+      [`${path}outbox/lookup.ts`]: "export { deduplicate } from '../consumer/postgres/index.js';",
+      [`${path}${scenario.file}`]: scenario.source,
+    },
+    'kit',
+    [],
+    'strict',
+  );
+
+  expect(findings).toEqual([
+    expect.objectContaining({ file: path + scenario.file, line: 1, rule: scenario.rule }),
   ]);
 });
 
@@ -391,6 +480,7 @@ it.each(['service', 'gateway'] as const)(
         "export const provisioning = () => import('@cadenway/nest-jobs/src/provisioning/setup.js');",
         "import '../../node_modules/@cadenway/nest-common/dist/index.js';",
         "import 'common-shortcut';",
+        "import '@cadenway/nest-messaging/consumer/postgres/internal';",
       ].join('\n'),
       'tsconfig.base.json': JSON.stringify({
         compilerOptions: {
@@ -407,7 +497,7 @@ it.each(['service', 'gateway'] as const)(
       withProject(sources, profile, [], 'strict')
         .filter((finding) => finding.rule === 'kit-package-private')
         .map((finding) => finding.line),
-    ).toEqual([3, 4, 5, 6, 7]);
+    ).toEqual([3, 4, 5, 6, 7, 8]);
     expect(
       withProject(sources, profile).filter((finding) => finding.rule === 'kit-package-private'),
     ).toEqual([]);
@@ -422,6 +512,7 @@ it('accepts official narrow entries in a strict service adapter', () => {
           "import '@cadenway/nest-messaging/outbox/writer';",
           "import '@cadenway/nest-messaging/outbox/relay';",
           "import '@cadenway/nest-messaging/outbox/schema';",
+          "import '@cadenway/nest-messaging/consumer/postgres';",
           "import '@cadenway/nest-jobs/runtime';",
           "import '@cadenway/nest-jobs/provisioning';",
         ].join('\n'),

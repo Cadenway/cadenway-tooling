@@ -3,7 +3,7 @@ import { posix } from 'node:path';
 import ts from 'typescript';
 
 import type { GraphEdge } from './architecture-graph.js';
-import { kitExportNamespace } from './architecture-kit-entries.js';
+import { kitExportPath } from './architecture-kit-entries.js';
 import { isTest, normalizePath, type ImportEdge } from './architecture-project.js';
 
 type Report = (rule: string, message: string, line?: number) => void;
@@ -27,8 +27,11 @@ const JOBS_RUNTIME = /^packages\/nest-jobs\/src\/runtime\//u;
 const JOBS_PROVISIONING = /^packages\/nest-jobs\/src\/provisioning\//u;
 const OUTBOX_WRITER = /^packages\/nest-messaging\/src\/outbox\/writer\//u;
 const OUTBOX_RELAY = /^packages\/nest-messaging\/src\/outbox\/relay\//u;
+const OUTBOX_PUBLICATION = /^packages\/nest-messaging\/src\/outbox\/(?:writer|relay)\//u;
 const OUTBOX_SCHEMA = /^packages\/nest-messaging\/src\/outbox\/schema\//u;
 const OUTBOX_RUNTIME = /^packages\/nest-messaging\/src\/outbox\/(?:writer|relay|wiring)\//u;
+const CONSUMER_CORE = /^packages\/nest-messaging\/src\/consumer\/(?!postgres\/)/u;
+const CONSUMER_POSTGRES = /^packages\/nest-messaging\/src\/consumer\/postgres\//u;
 const DATABASE = /^packages\/nest-common\/src\/database\//u;
 const TOKEN_GUARD =
   /^packages\/nest-common\/src\/auth\/(?:internal-token\/)?internal-token\.guard\.ts$/u;
@@ -96,7 +99,7 @@ function readPackage(
       report(manifest, 'kit-package-export', `Declare an explicit export for ${specifier}.`);
       continue;
     }
-    const namespace = kitExportNamespace(specifier);
+    const exportPath = kitExportPath(specifier);
     const authored = new Set<string>();
     for (const target of targets) {
       const path = posix.normalize(`${root}/${target}`);
@@ -110,11 +113,16 @@ function readPackage(
           'kit-package-export',
           `Export ${specifier} from authored production code. Its target ${target} is missing or test-only.`,
         );
-      } else if (namespace && !file.startsWith(`${root}/src/${namespace}/`)) {
+      } else if (
+        exportPath &&
+        (exportPath.endsWith('/')
+          ? !file.startsWith(`${root}/src/${exportPath}`)
+          : file !== `${root}/src/${exportPath}`)
+      ) {
         report(
           manifest,
           'kit-package-namespace',
-          `Export ${specifier} from src/${namespace}/. Its target ${target} points to ${file}.`,
+          `Export ${specifier} from src/${exportPath}. Its target ${target} points to ${file}.`,
         );
       } else {
         authored.add(file);
@@ -285,6 +293,24 @@ export function checkKitRuntimeBoundaries(
     OUTBOX_WRITER,
     'kit-outbox-relay-writer',
     'The outbox relay cannot depend on the writer',
+  );
+  check(
+    OUTBOX_PUBLICATION,
+    CONSUMER_POSTGRES,
+    'kit-outbox-consumer-postgres',
+    'Outbox writing and relaying cannot depend on PostgreSQL event deduplication',
+  );
+  check(
+    CONSUMER_POSTGRES,
+    OUTBOX_PUBLICATION,
+    'kit-consumer-postgres-outbox',
+    'PostgreSQL event deduplication cannot depend on the outbox writer or relay',
+  );
+  check(
+    CONSUMER_CORE,
+    CONSUMER_POSTGRES,
+    'kit-consumer-postgres-implementation',
+    'Event consumers must use their deduplication port independently of its PostgreSQL implementation',
   );
   check(
     OUTBOX_SCHEMA,
