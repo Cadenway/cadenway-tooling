@@ -2,13 +2,6 @@ import { readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import ts from 'typescript';
 
-export interface ArchitectureFinding {
-  readonly file: string;
-  readonly line: number;
-  readonly rule: string;
-  readonly message: string;
-}
-
 export interface ProjectFile {
   readonly file: string;
   readonly absolute: string;
@@ -49,18 +42,6 @@ export function isWithin(file: string, directory: string): boolean {
 
 export function posix(path: string): string {
   return path.split(sep).join('/');
-}
-
-export function report(
-  file: ProjectFile,
-  rule: string,
-  message: string,
-  node?: ts.Node,
-): ArchitectureFinding {
-  const line = node
-    ? file.source.getLineAndCharacterOfPosition(node.getStart(file.source)).line + 1
-    : 1;
-  return { file: file.file, line, rule, message };
 }
 
 function inside(path: string): boolean {
@@ -220,32 +201,4 @@ export function isTestFile(file: string): boolean {
       file,
     ) || /(?:^|\/)test-setup\.[cm]?ts$/u.test(file)
   );
-}
-
-export function findCycles(project: Project): ArchitectureFinding[] {
-  const findings: ArchitectureFinding[] = [];
-  const done = new Set<string>();
-  const stack: string[] = [];
-  const inStack = new Set<string>();
-  const visit = (file: ProjectFile): void => {
-    if (done.has(file.file)) return;
-    inStack.add(file.file);
-    stack.push(file.file);
-    for (const edge of file.edges) {
-      if (edge.typeOnly || edge.dynamic || !edge.target || isTestFile(edge.target)) continue;
-      const target = project.files.get(edge.target);
-      if (!target) continue;
-      if (inStack.has(target.file)) {
-        const chain = [...stack.slice(stack.indexOf(target.file)), target.file].join(' -> ');
-        findings.push(report(file, 'execution-cycle', `Static import cycle: ${chain}`, edge.node));
-      } else {
-        visit(target);
-      }
-    }
-    stack.pop();
-    inStack.delete(file.file);
-    done.add(file.file);
-  };
-  for (const file of project.files.values()) if (!isTestFile(file.file)) visit(file);
-  return findings;
 }

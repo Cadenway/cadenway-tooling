@@ -212,6 +212,221 @@ it('rejects private kit package imports and accepts an exact reasoned exception'
   expect(() => withProject(sources, 'kit', [{ ...exception, reason: '' }])).toThrow('undocumented');
 });
 
+const KIT: Readonly<Record<string, string>> = {
+  'packages/nest-common/package.json': JSON.stringify({
+    name: '@cadenway/nest-common',
+    type: 'module',
+    exports: {
+      '.': { types: './dist/index.d.ts', default: './dist/index.js' },
+      './database': { types: './dist/database/index.d.ts', default: './dist/database/index.js' },
+      './register': './register.mjs',
+    },
+  }),
+  'packages/nest-common/src/index.ts': "export const common = 'common';",
+  'packages/nest-common/src/database/index.ts': "export const database = 'database';",
+  'packages/nest-common/register.mjs': "export const register = 'register';",
+  'packages/nest-messaging/package.json': JSON.stringify({
+    name: '@cadenway/nest-messaging',
+    type: 'module',
+    exports: './dist/index.js',
+    peerDependencies: { '@cadenway/nest-common': 'workspace:^' },
+  }),
+  'packages/nest-messaging/src/index.ts':
+    "export { common } from '@cadenway/nest-common'; export { database } from '@cadenway/nest-common/database';",
+  'packages/nest-jobs/package.json': JSON.stringify({
+    name: '@cadenway/nest-jobs',
+    type: 'module',
+    exports: { '.': './dist/index.js' },
+  }),
+  'packages/nest-jobs/src/index.ts':
+    "export { runtime } from './runtime/start.js'; export { provision } from './provisioning/setup.js';",
+  'packages/nest-jobs/src/runtime/start.ts':
+    "export { schema as runtime } from '../schema/version.js';",
+  'packages/nest-jobs/src/provisioning/setup.ts':
+    "export { schema as provision } from '../schema/version.js';",
+  'packages/nest-jobs/src/schema/version.ts': 'export const schema = 3;',
+};
+
+it('resolves the declared strict kit entries before building any kit package', () => {
+  expect(withProject(KIT, 'kit', [], 'strict')).toEqual([]);
+});
+
+it('rejects undeclared package entries, private aliases and dependencies in the reverse direction', () => {
+  const findings = withProject(
+    {
+      ...KIT,
+      'tsconfig.base.json': JSON.stringify({
+        compilerOptions: {
+          module: 'nodenext',
+          paths: {
+            '@cadenway/nest-common': ['./packages/nest-common/src/private.js'],
+          },
+        },
+      }),
+      'packages/nest-common/package.json': JSON.stringify({
+        name: '@cadenway/nest-common',
+        type: 'module',
+        exports: { '.': './dist/index.js' },
+        dependencies: { '@cadenway/nest-jobs': 'workspace:^' },
+      }),
+      'packages/nest-common/src/index.ts': "export { runtime } from '@cadenway/nest-jobs';",
+      'packages/nest-common/src/private.ts': 'export const common = 1;',
+      'packages/nest-messaging/src/index.ts': [
+        "export { common } from '@cadenway/nest-common';",
+        "export { database } from '@cadenway/nest-common/database';",
+        "export { common as internal } from '../../nest-common/src/private.js';",
+      ].join('\n'),
+    },
+    'kit',
+    [],
+    'strict',
+  );
+  expect(findings).toEqual([
+    expect.objectContaining({
+      file: 'packages/nest-common/package.json',
+      rule: 'kit-package-direction',
+    }),
+    expect.objectContaining({
+      file: 'packages/nest-common/src/index.ts',
+      rule: 'kit-package-direction',
+    }),
+    ...[1, 2, 3].map((line) =>
+      expect.objectContaining({
+        file: 'packages/nest-messaging/src/index.ts',
+        line,
+        rule: 'kit-package-private',
+      }),
+    ),
+  ]);
+});
+
+it('requires messaging to declare common as a production dependency', () => {
+  const findings = withProject(
+    {
+      ...KIT,
+      'packages/nest-messaging/package.json': JSON.stringify({
+        name: '@cadenway/nest-messaging',
+        type: 'module',
+        exports: './dist/index.js',
+        devDependencies: { '@cadenway/nest-common': 'workspace:^' },
+      }),
+    },
+    'kit',
+    [],
+    'strict',
+  );
+  expect(findings.map(({ rule }) => rule)).toEqual([
+    'kit-package-dependency',
+    'kit-package-dependency',
+  ]);
+});
+
+it('rejects test-only code in the strict kit API and in a production module hook', () => {
+  const findings = withProject(
+    {
+      ...KIT,
+      'packages/nest-common/package.json': JSON.stringify({
+        name: '@cadenway/nest-common',
+        type: 'module',
+        exports: {
+          '.': './dist/index.js',
+          './database': './dist/database/index.js',
+          './fixtures': './dist/testing/database.js',
+          './register': './register.mjs',
+          './missing': './dist/missing.js',
+        },
+      }),
+      'packages/nest-common/src/testing/database.ts': 'export const database = 1;',
+      'packages/nest-common/src/index.ts': "export { database } from './testing/database.js';",
+      'packages/nest-common/register.mjs': "export { token } from './token.test.mjs';",
+      'packages/nest-common/token.test.mjs': 'export const token = 2;',
+    },
+    'kit',
+    [],
+    'strict',
+  );
+  expect(findings).toEqual([
+    ...['./dist/missing.js', './dist/testing/database.js']
+      .map((target) =>
+        expect.objectContaining({
+          file: 'packages/nest-common/package.json',
+          rule: 'kit-package-export',
+          message: expect.stringContaining(target),
+        }),
+      )
+      .reverse(),
+    ...['register.mjs', 'src/index.ts'].map((file) =>
+      expect.objectContaining({
+        file: `packages/nest-common/${file}`,
+        rule: 'production-test-import',
+      }),
+    ),
+  ]);
+});
+
+it('follows strict kit type and value imports across the internal runtime boundaries', () => {
+  const findings = withProject(
+    {
+      ...KIT,
+      'packages/nest-common/src/database/index.ts':
+        "export { guard as database } from './lookup.js';",
+      'packages/nest-common/src/database/lookup.ts':
+        "export { guard } from '../auth/internal-token/internal-token.guard.js';",
+      'packages/nest-common/src/auth/internal-token/internal-token.guard.ts':
+        "export const guard = 'guard';",
+      'packages/nest-jobs/src/runtime/start.ts':
+        "import type { Schema } from '../schema/version.js'; export const runtime: Schema = 1;",
+      'packages/nest-jobs/src/schema/version.ts': [
+        "export type { Schema } from '../provisioning/setup.js';",
+        'export const schema = 1;',
+      ].join('\n'),
+      'packages/nest-jobs/src/provisioning/setup.ts': [
+        "export { schema as provision } from '../schema/version.js';",
+        'export type Schema = number;',
+      ].join('\n'),
+    },
+    'kit',
+    [],
+    'strict',
+  );
+  expect(findings).toEqual([
+    expect.objectContaining({
+      file: 'packages/nest-common/src/database/index.ts',
+      rule: 'kit-database-auth-guard',
+    }),
+    expect.objectContaining({
+      file: 'packages/nest-common/src/database/lookup.ts',
+      rule: 'kit-database-auth-guard',
+    }),
+    expect.objectContaining({
+      file: 'packages/nest-jobs/src/runtime/start.ts',
+      rule: 'kit-runtime-provisioning',
+    }),
+  ]);
+});
+
+it('reports strict kit execution cycles and ignores type-only cycles', () => {
+  const findings = withProject(
+    {
+      ...KIT,
+      'packages/nest-common/src/left.ts':
+        "export { right } from './right.js'; export const left = 1;",
+      'packages/nest-common/src/right.ts': [
+        "export { left } from './left.js';",
+        "export type { Other } from './types.js';",
+        'export type Value = number;',
+        'export const right = 2;',
+      ].join('\n'),
+      'packages/nest-common/src/types.ts':
+        "export type { Value } from './right.js'; export type Other = string;",
+    },
+    'kit',
+    [],
+    'strict',
+  );
+  expect(findings).toEqual([expect.objectContaining({ rule: 'execution-cycle' })]);
+});
+
 it('keeps lightweight gateway adapters behind their application even when imported through an alias', () => {
   const findings: readonly ArchitectureFinding[] = withProject(
     {
