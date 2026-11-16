@@ -38,7 +38,8 @@
     "typescript": "catalog:"
   },
   "peerDependencies": {
-    "@cadenway/nest-messaging": "^0.0.1",
+    "@cadenway/contracts": ">=0.2.0 <1.0.0",
+    "@cadenway/nest-messaging": ">=0.0.1 <1.0.0",
     "@nestjs/testing": "catalog:",
     "drizzle-orm": "catalog:",
     "pg": "catalog:",
@@ -46,6 +47,9 @@
     "vitest": "catalog:"
   },
   "peerDependenciesMeta": {
+    "@cadenway/contracts": {
+      "optional": true
+    },
     "@cadenway/nest-messaging": {
       "optional": true
     },
@@ -57,6 +61,7 @@
     }
   },
   "devDependencies": {
+    "@cadenway/contracts": "^0.2.0",
     "@nestjs/testing": "catalog:",
     "@types/node": "catalog:",
     "drizzle-orm": "catalog:",
