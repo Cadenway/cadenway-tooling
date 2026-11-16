@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import ts from 'typescript';
 
 import { checkFileDeclarations, checkUtilityPath } from './architecture-file-conventions.js';
+import { isPrivateKitImport } from './architecture-kit-entries.js';
 import { findStrictPublicConsumers } from './architecture-public-contracts.js';
 
 export type StrictProfile = 'service' | 'gateway';
@@ -381,6 +382,14 @@ export function checkStrictImport(options: StrictImportOptions): void {
   const resolvedPackage = packageAt(target);
   const matchesPackage = (pattern: RegExp): boolean =>
     pattern.test(edge.specifier) || pattern.test(resolvedPackage);
+
+  if (isPrivateKitImport(edge.specifier, resolvedPackage || packageAt(edge.specifier))) {
+    report(
+      'kit-package-private',
+      `Import ${edge.specifier} through a public Service Kit package entry.`,
+      edge.line,
+    );
+  }
 
   if (isPure(owner?.layer) && !targetOwner) {
     report(
