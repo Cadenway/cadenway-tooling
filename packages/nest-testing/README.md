@@ -38,6 +38,16 @@ or any infrastructure.
 `<module>.module.ts` can declare tokens and factory providers inline. The optional
 `composition/` directory holds wiring split into separate files. Strict verification accepts both.
 
+Strict verification ties the named exports of authored `.use-case.ts`, `.input.ts`, `.output.ts`,
+`.port.ts` and `.dto.ts` files to their filename and role, and requires a public instance `execute`
+method on use cases. Keep each named exported contract in its own file and private helpers beside
+their caller. Give reusable functions responsibility-specific names and paths. The verifier flags
+generic utility paths in authored source and skips generated gateway clients.
+
+Place cross-layer integration specs and their support files in `tests/`. Keep unit specs and
+single-adapter integration specs beside their subject. Strict mode reports TypeScript sources under
+the singular root `test/`; the legacy convention accepts both root paths during migration.
+
 Omit `convention` to keep the existing rules. In that mode, an exception names the exact `file` and
 `rule` and states its `reason`. The verifier rejects stale exceptions. Strict mode rejects exceptions.
 

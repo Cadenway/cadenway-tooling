@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 
 import ts from 'typescript';
 
+import { checkFileDeclarations, checkUtilityPath } from './architecture-file-conventions.js';
 import { findStrictPublicConsumers } from './architecture-public-contracts.js';
 
 export type StrictProfile = 'service' | 'gateway';
@@ -199,61 +200,6 @@ function hasRolePath(path: string, layer: Layer): boolean {
   }
 }
 
-function lineOf(node: ts.Node, source: ts.SourceFile): number {
-  return source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
-}
-
-// Check declarations, not public named re-exports. A local declaration can be exported by alias.
-function namedContracts(source: ts.SourceFile): readonly ts.Node[] {
-  const exportedLocals = new Set<string>();
-  for (const statement of source.statements) {
-    if (
-      ts.isExportDeclaration(statement) &&
-      !statement.moduleSpecifier &&
-      statement.exportClause &&
-      ts.isNamedExports(statement.exportClause)
-    ) {
-      for (const element of statement.exportClause.elements) {
-        exportedLocals.add((element.propertyName ?? element.name).text);
-      }
-    }
-  }
-
-  return source.statements.filter(
-    (statement) =>
-      (ts.isInterfaceDeclaration(statement) || ts.isTypeAliasDeclaration(statement)) &&
-      (exportedLocals.has(statement.name.text) ||
-        statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)),
-  );
-}
-
-function checkNamedContracts(source: ts.SourceFile, path: string, report: Report): void {
-  const contracts = namedContracts(source);
-  for (const extra of contracts.slice(1)) {
-    report(
-      'strict-contract-file',
-      'Use one exported named type or interface per declaration file.',
-      lineOf(extra, source),
-    );
-  }
-  if (
-    OUTBOUND_PORT.test(path) &&
-    (contracts.length !== 1 || !contracts[0] || !ts.isInterfaceDeclaration(contracts[0]))
-  ) {
-    report(
-      'strict-contract-file',
-      'Declare and export exactly one interface for this outbound port.',
-    );
-  }
-  if (isUseCaseRole(path) && path.endsWith('.use-case.ts') && contracts[0]) {
-    report(
-      'strict-contract-file',
-      'Move exported use case contracts to their own .input.ts, .output.ts or model file.',
-      lineOf(contracts[0], source),
-    );
-  }
-}
-
 /** Verifies structure and naming independently of module resolution. */
 export function checkStrictSource(
   file: string,
@@ -264,6 +210,7 @@ export function checkStrictSource(
   report: Report,
 ): void {
   if (!file.startsWith('src/')) return;
+  checkUtilityPath(file, report);
 
   if (!owner) {
     if (!isTechnicalSource(file, profile)) {
@@ -320,7 +267,7 @@ export function checkStrictSource(
   } else if (!hasRolePath(path, owner.layer)) {
     report('strict-layout', `Place ${path} under ${ROLE_HINTS[owner.layer]}.`);
   }
-  if (owner.layer !== 'public') checkNamedContracts(ast, path, report);
+  if (owner.layer !== 'public') checkFileDeclarations(ast, path, report);
 }
 
 function isComposition(layer: Layer): boolean {

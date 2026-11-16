@@ -647,7 +647,8 @@ function sourceFiles(
   compiler: ts.CompilerOptions,
   strict: StrictProfile | undefined,
 ): readonly SourceUnit[] {
-  const directories: readonly string[] = options.profile === 'kit' ? ['packages'] : ['src', 'test'];
+  const directories: readonly string[] =
+    options.profile === 'kit' ? ['packages'] : ['src', 'tests', 'test'];
   const includes: readonly string[] | undefined =
     options.profile === 'kit' ? ['*/src/**/*'] : undefined;
   return directories
@@ -897,17 +898,22 @@ function checkFile(
     report('kebab-case', 'Use lowercase kebab-case for file and directory name segments.');
   }
 
-  if (/\.(?:spec|int-spec)\.[cm]?ts$/u.test(unit.file) && !unit.file.startsWith('test/')) {
+  const legacyTestPath = unit.file.startsWith('test/');
+  const crossLayerTestPath = legacyTestPath || unit.file.startsWith('tests/');
+  if (strict && legacyTestPath) {
+    report('strict-test-directory', 'Move cross-layer test sources from test/ to tests/.');
+  }
+  if (/\.(?:spec|int-spec)\.[cm]?ts$/u.test(unit.file) && !crossLayerTestPath) {
     const subject: string = unit.file.replace(/\.(?:spec|int-spec)(?=\.[cm]?ts$)/u, '');
     if (!fileNames.has(subject)) {
       report(
         'spec-colocation',
-        `Place the spec next to its subject ${subject}, or use test/ for a cross-layer integration scenario.`,
+        `Place the spec next to its subject ${subject}, or use tests/ for a cross-layer integration scenario.`,
       );
     }
   }
-  if (unit.file.startsWith('test/') && /\.spec\.[cm]?ts$/u.test(unit.file)) {
-    report('cross-layer-spec', 'Use the .int-spec.ts suffix for cross-layer tests in test/.');
+  if (crossLayerTestPath && /\.spec\.[cm]?ts$/u.test(unit.file)) {
+    report('cross-layer-spec', 'Use the .int-spec.ts suffix for cross-layer tests in tests/.');
   }
   if (strict) return;
 

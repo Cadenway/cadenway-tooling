@@ -88,6 +88,7 @@ it('accepts a thin HTTP adapter, typed port and colocated specs', () => {
     'src/modules/demo/infrastructure/persistence/demo.repository.ts':
       "import type { DemoPort } from '../../application/ports/demo.port.js'; import { Demo } from '../../domain/demo.js'; export const get: DemoPort = () => new Demo();",
     'test/read-demo.int-spec.ts': '',
+    'tests/read-demo.int-spec.ts': '',
   };
 
   expect(withProject(sources)).toEqual([]);
@@ -346,6 +347,130 @@ it('accepts a domain-free strict query whose public contracts and Nest wiring ma
 });
 
 it.each(['service', 'gateway'] as const)(
+  'requires tests/ for cross-layer integration sources in the strict %s profile',
+  (profile) => {
+    const files = {
+      ...STRICT_SERVICE,
+      'tests/read-demo.int-spec.ts': 'export {};',
+      'tests/support/demo-fixture.ts': 'export const id = "demo";',
+    };
+    expect(withProject(files, profile, [], 'strict')).toEqual([]);
+    expect(
+      withProject(
+        {
+          ...files,
+          'test/read-demo.int-spec.ts': 'export {};',
+          'tests/read-demo.spec.ts': 'export {};',
+        },
+        profile,
+        [],
+        'strict',
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        file: 'test/read-demo.int-spec.ts',
+        rule: 'strict-test-directory',
+      }),
+      expect.objectContaining({ file: 'tests/read-demo.spec.ts', rule: 'cross-layer-spec' }),
+    ]);
+  },
+);
+
+const READ_DEMO_CASE = `${DEMO_QUERY}/read-demo.use-case.ts`;
+const READ_DEMO_INPUT = `${DEMO_QUERY}/read-demo.input.ts`;
+const READ_DEMO_OUTPUT = `${DEMO_QUERY}/read-demo.output.ts`;
+const DEMO_CLOCK_PORT =
+  'src/modules/demo/application/ports/outbound/clock/lifecycle/demo-clock.port.ts';
+const DEMO_DTO = 'src/modules/demo/presentation/http/dto/input/demo/read-demo-body.dto.ts';
+
+it.each(['service', 'gateway'] as const)(
+  'accepts role-specific exports and private declarations in a strict %s profile',
+  (profile) => {
+    expect(
+      withProject(
+        {
+          ...STRICT_SERVICE,
+          [READ_DEMO_INPUT]:
+            'interface ReadDemoInput { readonly id: string; } export type { ReadDemoInput };',
+          [DEMO_DTO]:
+            'type RawId = string; export class ReadDemoBodyDto { readonly id: RawId = "demo"; }',
+          'src/modules/demo/infrastructure/adapters/http/parse-retry-after.ts':
+            'export const parseRetryAfter = (value: string) => Number(value);',
+        },
+        profile,
+        [],
+        'strict',
+      ),
+    ).toEqual([]);
+  },
+);
+
+it('flags export names, grouped contracts and generic technical utility paths in strict mode', () => {
+  const genericDirectory = 'src/config/utils/parse.ts';
+  const genericFile = 'src/modules/demo/infrastructure/adapters/http/request-helpers.ts';
+  const findings = withProject(
+    {
+      ...STRICT_SERVICE,
+      [READ_DEMO_CASE]: 'export default class ReadDemo { execute(): void {} }',
+      [READ_DEMO_INPUT]: 'interface ReadDemoInput {} export type { ReadDemoInput as WrongInput };',
+      [READ_DEMO_OUTPUT]: 'export interface ReadDemoOutput {} export interface InternalDetail {}',
+      [DEMO_CLOCK_PORT]: 'export interface WallClock {}',
+      [DEMO_DTO]: 'export class ReadDemoBody {} export class ReadDemoHeaders {}',
+      [genericDirectory]: 'export const parse = Number;',
+      [genericFile]: 'export const parse = Number;',
+    },
+    'service',
+    [],
+    'strict',
+  );
+
+  expect(findings).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ file: READ_DEMO_CASE, rule: 'strict-role-export' }),
+      expect.objectContaining({ file: READ_DEMO_INPUT, rule: 'strict-role-export' }),
+      expect.objectContaining({ file: READ_DEMO_OUTPUT, rule: 'strict-contract-file' }),
+      expect.objectContaining({ file: DEMO_CLOCK_PORT, rule: 'strict-role-export' }),
+      expect.objectContaining({ file: DEMO_DTO, rule: 'strict-contract-file' }),
+      expect.objectContaining({ file: genericDirectory, rule: 'strict-utility-path' }),
+      expect.objectContaining({ file: genericFile, rule: 'strict-utility-path' }),
+    ]),
+  );
+});
+
+it.each(['static', 'protected', 'private'] as const)(
+  'rejects a %s execute method even on a correctly named use case',
+  (modifier) => {
+    const findings = withProject(
+      {
+        ...STRICT_SERVICE,
+        [READ_DEMO_CASE]: `export class ReadDemo { ${modifier} execute(): void {} }`,
+      },
+      'service',
+      [],
+      'strict',
+    );
+    expect(findings).toContainEqual(
+      expect.objectContaining({ file: READ_DEMO_CASE, rule: 'strict-use-case-execute' }),
+    );
+  },
+);
+
+it('requires a runtime export of the use case class', () => {
+  const findings = withProject(
+    {
+      ...STRICT_SERVICE,
+      [READ_DEMO_CASE]: 'class ReadDemo { execute(): void {} } export type { ReadDemo };',
+    },
+    'service',
+    [],
+    'strict',
+  );
+  expect(findings).toContainEqual(
+    expect.objectContaining({ file: READ_DEMO_CASE, rule: 'strict-role-export' }),
+  );
+});
+
+it.each(['service', 'gateway'] as const)(
   'accepts inline Nest wiring without a composition directory for the strict %s profile',
   (profile) => {
     const files = Object.fromEntries(
@@ -574,6 +699,8 @@ const STRICT_HTTP_GATEWAY: Readonly<Record<string, string>> = {
     '@Module({ imports: [ClientsModule, MeModule, TaskDetailModule] }) export class AppModule {}',
   ].join('\n'),
   'src/clients/generated/identity-service.ts': 'export const getUser = () => ({ id: "demo" });',
+  'src/clients/generated/helpers/transport.dto.ts':
+    'export interface Body {} export interface Headers {}',
   'src/presentation/http/mappers/current-user.mapper.ts':
     'export const toCurrentUser = (user: { id: string }) => ({ id: user.id });',
   'src/clients/identity-service.client.ts': [
