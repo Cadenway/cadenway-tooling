@@ -326,6 +326,8 @@ const STRICT_SERVICE: Readonly<Record<string, string>> = {
     'export interface DemoClock { now(): Date; }',
   [`${DEMO_QUERY}/read-demo.input.ts`]: 'export interface ReadDemoInput { readonly id: string; }',
   [`${DEMO_QUERY}/read-demo.output.ts`]: 'export interface ReadDemoOutput { readonly id: string; }',
+  'src/modules/demo/application/services/lifecycle/demo-reader.service.ts':
+    'export function demoId(): string { return "demo"; }',
   [`${DEMO_QUERY}/read-demo.use-case.ts`]: [
     "import type { DemoClock } from '../../../../ports/outbound/clock/lifecycle/demo-clock.port.js';",
     "import type { ReadDemoInput } from './read-demo.input.js';",
@@ -518,6 +520,8 @@ const STRICT_HTTP_GATEWAY: Readonly<Record<string, string>> = {
   'tsconfig.base.json':
     '{"compilerOptions":{"module":"nodenext","experimentalDecorators":true,"paths":{"@clients/*":["./src/clients/*"],"@routes/*":["./src/routes/*"]}}}',
   'src/clients/generated/identity-service.ts': 'export const getUser = () => ({ id: "demo" });',
+  'src/presentation/http/mappers/current-user.mapper.ts':
+    'export const toCurrentUser = (user: { id: string }) => ({ id: user.id });',
   'src/clients/identity-service.client.ts': [
     "import { getUser } from './generated/identity-service.js';",
     'export class IdentityServiceClient { readUser() { return getUser(); } }',
@@ -532,11 +536,12 @@ const STRICT_HTTP_GATEWAY: Readonly<Record<string, string>> = {
   [MIRROR_TOKEN]: 'export const IDENTITY_USERS = Symbol("identity-users");',
   [MIRROR_CONTROLLER]: [
     "import { Controller, Inject } from '@nestjs/common';",
+    "import { toCurrentUser } from '../../../../../../presentation/http/mappers/current-user.mapper.js';",
     "import type { IdentityUsers } from '../../../../application/ports/outbound/identity/users/identity-users.port.js';",
     "import { IDENTITY_USERS } from '../../../../composition/tokens/users/identity-users.token.js';",
     '@Controller("me") export class MeController {',
     '  constructor(@Inject(IDENTITY_USERS) private readonly users: IdentityUsers) {}',
-    '  get() { return this.users.readUser(); }',
+    '  get() { return toCurrentUser(this.users.readUser()); }',
     '}',
   ].join('\n'),
   'src/routes/me/infrastructure/adapters/identity/identity-users.adapter.ts': [

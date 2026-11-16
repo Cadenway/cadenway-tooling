@@ -50,6 +50,7 @@ const TECHNICAL_SOURCE =
   /^src\/(?:main\.ts$|app\.module\.ts$|telemetry\.ts$|(?:config|infrastructure|health)\/)/u;
 const GATEWAY_TECHNICAL_SOURCE =
   /^src\/(?:(?:realtime|gateway)-application\.ts$|problems\/|clients\/(?:clients\.module\.ts|[^/]+\.client(?:\.(?:spec|int-spec|fixture|mock|harness))?\.ts)$)/u;
+const SHARED_GATEWAY_PRESENTATION = /^src\/presentation\/http\/(?:mappers|middleware|session)\//u;
 const SHARED_CLIENT = /^src\/clients\/[^/]+\.client\.ts$/u;
 const CLIENT_MODULE = 'src/clients/clients.module.ts';
 const BOOTSTRAP_COMPOSITION = /^src\/(?:app\.module|(?:gateway|realtime)-application)\.ts$/u;
@@ -79,6 +80,7 @@ const DOMAIN_ROLES: readonly RegExp[] = [
 ];
 
 const APPLICATION_ROLES: readonly RegExp[] = [
+  /^application\/services\/[^/]+\/[^/]+\.service\.ts$/u,
   OUTBOUND_PORT,
   /^application\/models\/[^/]+\/[^/]+\.model\.ts$/u,
   /^application\/projections\/[^/]+\/[^/]+\.projection\.ts$/u,
@@ -116,7 +118,7 @@ const COMPOSITION_ROLES: readonly RegExp[] = [
 const ROLE_HINTS: Readonly<Partial<Record<Layer, string>>> = {
   domain: 'domain/<role>/<area>/<name>.<role>.ts',
   application:
-    'application/use-cases/{commands,queries}/<area>/<operation>/<operation>.<role>.ts, application/ports/outbound/<concern>/<area>/<name>.port.ts, or application/{models,projections,mappers}/<area>/<name>.<role>.ts',
+    'application/use-cases/{commands,queries}/<area>/<operation>/<operation>.<role>.ts, application/ports/outbound/<concern>/<area>/<name>.port.ts, or application/{models,projections,mappers,services}/<area>/<name>.<role>.ts',
   presentation: 'presentation/<transport>/<role>/<area>/<name>.<role>.ts',
   infrastructure:
     'infrastructure/persistence/drizzle/<role>/<area>/, infrastructure/messaging/{outbox,rebuild}/<area>/, infrastructure/jobs/pg-boss/<area>/, or infrastructure/adapters/<integration>/',
@@ -157,7 +159,9 @@ function isTechnicalSource(file: string, profile: StrictProfile): boolean {
     TECHNICAL_SOURCE.test(file) ||
     (profile === 'service'
       ? file === 'src/migrate.ts'
-      : GATEWAY_TECHNICAL_SOURCE.test(file) || isStrictGenerated(file, profile))
+      : GATEWAY_TECHNICAL_SOURCE.test(file) ||
+        SHARED_GATEWAY_PRESENTATION.test(file) ||
+        isStrictGenerated(file, profile))
   );
 }
 
@@ -357,6 +361,9 @@ function permitsSharedDependency(
   if (!owner) return isTechnicalSource(source, profile);
   if (profile === 'gateway' && target.startsWith('src/problems/')) {
     return owner.layer === 'presentation';
+  }
+  if (profile === 'gateway' && SHARED_GATEWAY_PRESENTATION.test(target)) {
+    return owner.layer === 'presentation' || isComposition(owner.layer);
   }
   return (
     (target.startsWith('src/config/') || target.startsWith('src/infrastructure/')) &&
