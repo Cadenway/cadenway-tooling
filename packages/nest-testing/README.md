@@ -68,3 +68,7 @@ and test activation in the consumer checkout. A strict suite with findings fails
 
 The root entry point remains reserved for the planned disposable PostgreSQL and NATS fixtures,
 as listed in the [NestJS architecture guide](https://github.com/Cadenway/cadenway-service-kit/blob/main/docs/hexagonal-architecture.md).
+When those fixtures ship, validate them in two services against published archives. Check which
+peers each service needs and exercise the supported range of the optional `@cadenway/nest-messaging`
+peer. Keep `/architecture` runnable without containers and retain the services’ Compose scenarios
+for full startup coverage.
