@@ -12,6 +12,9 @@ pnpm install --frozen-lockfile
 pnpm quality
 ```
 
+For repository assistant instructions, examples, and read-only review exercises, see
+[Code quality for assistants](docs/assistant-code-quality.md).
+
 ## Release and adoption
 
 The package names and exports are unchanged. Changesets versions releases and the release workflow publishes to GitHub Packages.
