@@ -31,6 +31,7 @@ export interface StrictImportEdge {
   readonly line: number;
   readonly typeOnly: boolean;
   readonly namedImport: boolean;
+  readonly soleRuntimeNamedImport: string | undefined;
 }
 
 type Report = (rule: string, message: string, line?: number) => void;
@@ -382,6 +383,13 @@ export function checkStrictImport(options: StrictImportOptions): void {
   const resolvedPackage = packageAt(target);
   const matchesPackage = (pattern: RegExp): boolean =>
     pattern.test(edge.specifier) || pattern.test(resolvedPackage);
+  const importsHttpIdempotency =
+    profile === 'service' &&
+    owner?.layer === 'presentation' &&
+    pathIn(source, owner).startsWith('presentation/http/') &&
+    edge.specifier === '@cadenway/nest-common/database' &&
+    edge.soleRuntimeNamedImport === 'Idempotent' &&
+    (target === undefined || resolvedPackage === '@cadenway/nest-common');
 
   if (isPrivateKitImport(edge.specifier, resolvedPackage || packageAt(edge.specifier))) {
     report(
@@ -415,6 +423,7 @@ export function checkStrictImport(options: StrictImportOptions): void {
   } else if (
     matchesPackage(CONCRETE_ADAPTER) &&
     owner?.layer !== 'infrastructure' &&
+    !importsHttpIdempotency &&
     !(
       COMPOSITION_ADAPTER.test(edge.specifier) &&
       (owner
