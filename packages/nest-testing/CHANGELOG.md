@@ -1,5 +1,11 @@
 # @cadenway/nest-testing
 
+## 0.5.2
+
+### Patch Changes
+
+- d4fc211: Allow a standalone named import of the Service Kit's `Idempotent` decorator in service HTTP presentation. Other database imports remain subject to the existing architecture rules.
+
 ## 0.5.1
 
 ### Patch Changes
