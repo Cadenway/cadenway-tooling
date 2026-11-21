@@ -1131,6 +1131,80 @@ it('keeps provider SDKs at the service boundary and rejects SQL in the gateway',
   expect(gatewayFindings).toEqual([expect.objectContaining({ rule: 'adapter-boundary' })]);
 });
 
+const DEMO_HTTP_CONTROLLER =
+  'src/modules/demo/presentation/http/controllers/demo/demo.controller.ts';
+
+it('allows the aliased Idempotent decorator in strict service HTTP presentation only', () => {
+  const sources = {
+    ...STRICT_SERVICE,
+    'node_modules/@cadenway/nest-common/package.json':
+      '{"name":"@cadenway/nest-common","type":"module","exports":{"./database":{"types":"./database.d.ts"}}}',
+    'node_modules/@cadenway/nest-common/database.d.ts':
+      'export declare function Idempotent(): MethodDecorator;',
+    [DEMO_HTTP_CONTROLLER]: [
+      "import { Idempotent as ReplayWrite } from '@cadenway/nest-common/database';",
+      STRICT_SERVICE[DEMO_HTTP_CONTROLLER]?.replace('  read(id:', '  @ReplayWrite() read(id:'),
+    ].join('\n'),
+  };
+
+  expect(withProject(sources, 'service', [], 'strict')).toEqual([]);
+  expect(withProject(sources, 'gateway', [], 'strict')).toContainEqual(
+    expect.objectContaining({ file: DEMO_HTTP_CONTROLLER, rule: 'adapter-boundary' }),
+  );
+});
+
+it('rejects imports other than a standalone Idempotent binding in HTTP presentation', () => {
+  const imports = [
+    "import { TenantTransactionRunner as Idempotent } from '@cadenway/nest-common/database';",
+    "import { Idempotent as ReplayWrite, type TenantTransactionRunner } from '@cadenway/nest-common/database';",
+    "import type { Idempotent as ReplayType } from '@cadenway/nest-common/database';",
+    "import { type Idempotent as InlineReplayType } from '@cadenway/nest-common/database';",
+    "import * as database from '@cadenway/nest-common/database';",
+    "import databaseDefault, { Idempotent as ReplayDefault } from '@cadenway/nest-common/database';",
+    "import '@cadenway/nest-common/database';",
+    "export { Idempotent as ReplayExport } from '@cadenway/nest-common/database';",
+    "const loadDatabase = () => import('@cadenway/nest-common/database');",
+    "const loadRequired = () => require('@cadenway/nest-common/database');",
+  ];
+  const findings = withProject(
+    {
+      ...STRICT_SERVICE,
+      [DEMO_HTTP_CONTROLLER]: [...imports, STRICT_SERVICE[DEMO_HTTP_CONTROLLER]].join('\n'),
+    },
+    'service',
+    [],
+    'strict',
+  ).filter(({ file, rule }) => file === DEMO_HTTP_CONTROLLER && rule === 'adapter-boundary');
+
+  expect(findings.map(({ line }) => line)).toEqual(imports.map((_, index) => index + 1));
+});
+
+it('continues to reject Idempotent in the strict pure layers and messaging presentation', () => {
+  const useCase = `${DEMO_QUERY}/read-demo.use-case.ts`;
+  const domain = 'src/modules/demo/domain/policies/lifecycle/demo.policy.ts';
+  const handler = 'src/modules/demo/presentation/messaging/handlers/demo/demo.handler.ts';
+  const dependency = "import { Idempotent } from '@cadenway/nest-common/database';";
+  const findings = withProject(
+    {
+      ...STRICT_SERVICE,
+      [useCase]: [dependency, STRICT_SERVICE[useCase]].join('\n'),
+      [domain]: `${dependency}\nexport const demo = Idempotent;`,
+      [handler]: `${dependency}\nexport const handle = Idempotent;`,
+    },
+    'service',
+    [],
+    'strict',
+  );
+
+  expect(findings).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ file: domain, rule: 'framework-free' }),
+      expect.objectContaining({ file: useCase, rule: 'framework-free' }),
+      expect.objectContaining({ file: handler, rule: 'adapter-boundary' }),
+    ]),
+  );
+});
+
 it('allows kit modules in technical bootstrap without allowing direct SDKs there', () => {
   const module = 'src/app.module.ts';
   const bootstrap = 'src/realtime-application.ts';

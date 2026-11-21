@@ -54,6 +54,9 @@ export interface ImportEdge {
   /** Whether the source uses a static import with explicit member names. */
   readonly namedImport: boolean;
 
+  /** Original name of the only binding in a static named runtime import. */
+  readonly soleRuntimeNamedImport: string | undefined;
+
   /**
    * Property mode
    *
@@ -194,6 +197,7 @@ export function readEdges(
     runtime: boolean,
     typeOnly = false,
     namedImport = false,
+    soleRuntimeNamedImport?: string,
   ): void => {
     if (node && ts.isStringLiteralLike(node)) {
       const mode: ts.ResolutionMode = ts.getModeForUsageLocation(ast, node, compiler);
@@ -203,6 +207,7 @@ export function readEdges(
         runtime,
         typeOnly,
         namedImport,
+        soleRuntimeNamedImport,
         mode,
       });
     }
@@ -228,7 +233,13 @@ export function readEdges(
           members.elements.some((element) => !element.isTypeOnly));
       const namedImport =
         !clause?.name && !!members && ts.isNamedImports(members) && members.elements.length > 0;
-      add(node.moduleSpecifier, runtime, !runtime, namedImport);
+      const soleMember =
+        namedImport && members.elements.length === 1 ? members.elements[0] : undefined;
+      const soleRuntimeNamedImport =
+        runtime && soleMember && !soleMember.isTypeOnly
+          ? (soleMember.propertyName ?? soleMember.name).text
+          : undefined;
+      add(node.moduleSpecifier, runtime, !runtime, namedImport, soleRuntimeNamedImport);
     } else if (ts.isExportDeclaration(node)) {
       const clause: ts.NamedExportBindings | undefined = node.exportClause;
       const runtime =
