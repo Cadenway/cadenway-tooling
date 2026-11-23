@@ -1,0 +1,5 @@
+{
+  "extends": "./tsconfig.json",
+  "include": ["packages/nest-testing/src/**/*.kit-spec.ts"],
+  "exclude": []
+}

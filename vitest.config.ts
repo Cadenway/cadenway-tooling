@@ -20,6 +20,15 @@ export default defineConfig({
           hookTimeout: 180_000,
         },
       },
+      {
+        extends: true,
+        test: {
+          name: 'service-kit',
+          include: ['packages/nest-testing/src/**/*.kit-spec.ts'],
+          testTimeout: 60_000,
+          hookTimeout: 180_000,
+        },
+      },
     ],
   },
 });

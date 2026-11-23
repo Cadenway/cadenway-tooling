@@ -4,5 +4,6 @@
   "compilerOptions": {
     "experimentalDecorators": true,
     "emitDecoratorMetadata": true
-  }
+  },
+  "exclude": ["packages/*/src/**/*.kit-spec.ts"]
 }

@@ -1,13 +1,44 @@
 import { generateKeyPairSync, type JsonWebKey } from 'node:crypto';
 
-import type {
-  Ed25519PrivateJwk,
-  Ed25519PublicJwk,
-  InternalPrincipal,
-  InternalTokenClaims,
-  InternalTokenSigner,
-  InternalTokenVerifier,
-} from '@cadenway/nest-common';
+/**
+ * Public Ed25519 test key in the format the token verifier accepts.
+ */
+export interface TestPublicJwk {
+  readonly kty: 'OKP';
+  readonly crv: 'Ed25519';
+  readonly x: string;
+  readonly kid: string;
+}
+
+/**
+ * Private Ed25519 test key for the signer.
+ */
+export interface TestPrivateJwk extends TestPublicJwk {
+  readonly d: string;
+}
+
+interface TestTokenSigner<TClaims> {
+  sign(audience: string, claims: TClaims): Promise<string>;
+}
+
+interface TestTokenVerifier<TPrincipal> {
+  verify(token: string): Promise<TPrincipal>;
+}
+
+/**
+ * Creates the application's actual internal token signer and verifier for disposable keys.
+ * Cadenway services pass the factories from their published Service Kit.
+ */
+export interface TestTokenFactories<TClaims, TPrincipal> {
+  createSigner: (options: {
+    readonly issuer: string;
+    readonly privateJwk: TestPrivateJwk;
+  }) => Promise<TestTokenSigner<TClaims>>;
+  createVerifier: (options: {
+    readonly audience: string;
+    readonly trustedIssuers: Readonly<Record<string, readonly TestPublicJwk[]>>;
+  }) => Promise<TestTokenVerifier<TPrincipal>>;
+}
 
 /**
  * Constant DEFAULT_ISSUER
@@ -26,7 +57,10 @@ const DEFAULT_ISSUER: string = 'api-gateway';
  * @description
  * Options of `createTestInternalTokens`.
  */
-export interface TestInternalTokensOptions {
+export interface TestInternalTokensOptions<TClaims, TPrincipal> {
+  /** Token factories from the SDK installed by the service under test. */
+  readonly tokenFactories: TestTokenFactories<TClaims, TPrincipal>;
+
   // #region Properties
   /**
    * Property audience
@@ -160,7 +194,7 @@ export type InternalTokenSignerEnvironment = {
  * Internal token keys generated for one test run, with what the application under test needs to
  * trust them and what a test needs to call a guarded route.
  */
-export interface TestInternalTokens {
+export interface TestInternalTokens<TClaims, TPrincipal> {
   // #region Properties
   /**
    * Property audience
@@ -190,10 +224,10 @@ export interface TestInternalTokens {
    * @description
    * Verification keys by issuer: the `trustedIssuers` option of the verifier.
    *
-   * @type {Readonly<Record<string, readonly Ed25519PublicJwk[]>>}
+   * @type {Readonly<Record<string, readonly TestPublicJwk[]>>}
    * @readonly
    */
-  readonly trustedIssuers: Readonly<Record<string, readonly Ed25519PublicJwk[]>>;
+  readonly trustedIssuers: Readonly<Record<string, readonly TestPublicJwk[]>>;
 
   /**
    * Property verifierEnv
@@ -227,12 +261,12 @@ export interface TestInternalTokens {
    * @description
    * Signs an internal token with the signer of `@cadenway/nest-common`, valid 60 seconds.
    *
-   * @param {InternalTokenClaims} claims - Who the call is made for.
+   * @param {TClaims} claims - Who the call is made for.
    * @param {SignTestTokenOptions} options - Another issuer or audience.
    * @returns {Promise<string>} The compact JWT.
    * @throws {Error} When the issuer has no key or the claims are inconsistent.
    */
-  sign(claims: InternalTokenClaims, options?: SignTestTokenOptions): Promise<string>;
+  sign(claims: TClaims, options?: SignTestTokenOptions): Promise<string>;
 
   /**
    * Method authorization
@@ -240,11 +274,11 @@ export interface TestInternalTokens {
    * @description
    * Signs a token and returns the value of the `Authorization` header that carries it.
    *
-   * @param {InternalTokenClaims} claims - Who the call is made for.
+   * @param {TClaims} claims - Who the call is made for.
    * @param {SignTestTokenOptions} options - Another issuer or audience.
    * @returns {Promise<string>} `Bearer <token>`.
    */
-  authorization(claims: InternalTokenClaims, options?: SignTestTokenOptions): Promise<string>;
+  authorization(claims: TClaims, options?: SignTestTokenOptions): Promise<string>;
 
   /**
    * Method verify
@@ -255,10 +289,10 @@ export interface TestInternalTokens {
    *
    * @param {string} token - Compact JWT, or the whole `Bearer <token>` header value.
    * @param {string} audience - Name of the faked service. Defaults to the service under test.
-   * @returns {Promise<InternalPrincipal>} The verified principal.
+   * @returns {Promise<TPrincipal>} The verified principal.
    * @throws {Error} When the token is not valid for that service.
    */
-  verify(token: string, audience?: string): Promise<InternalPrincipal>;
+  verify(token: string, audience?: string): Promise<TPrincipal>;
   // #endregion
 }
 
@@ -270,9 +304,9 @@ export interface TestInternalTokens {
  * its own.
  *
  * @param {string} kid - Key id to give the key.
- * @returns {Ed25519PrivateJwk} The private JWK.
+ * @returns {TestPrivateJwk} The private JWK.
  */
-export function generateSigningJwk(kid: string): Ed25519PrivateJwk {
+export function generateSigningJwk(kid: string): TestPrivateJwk {
   const jwk: JsonWebKey = generateKeyPairSync('ed25519').privateKey.export({ format: 'jwk' });
   if (typeof jwk.x !== 'string' || typeof jwk.d !== 'string') {
     throw new Error('The generated key is not an Ed25519 private key.');
@@ -286,10 +320,10 @@ export function generateSigningJwk(kid: string): Ed25519PrivateJwk {
  * @description
  * Returns the verification key matching a signing key.
  *
- * @param {Ed25519PrivateJwk} jwk - Signing key.
- * @returns {Ed25519PublicJwk} The public JWK, without the private member.
+ * @param {TestPrivateJwk} jwk - Signing key.
+ * @returns {TestPublicJwk} The public JWK, without the private member.
  */
-export function publicJwkOf(jwk: Ed25519PrivateJwk): Ed25519PublicJwk {
+export function publicJwkOf(jwk: TestPrivateJwk): TestPublicJwk {
   return { kty: jwk.kty, crv: jwk.crv, x: jwk.x, kid: jwk.kid };
 }
 
@@ -298,37 +332,38 @@ export function publicJwkOf(jwk: Ed25519PrivateJwk): Ed25519PublicJwk {
  *
  * @description
  * Generates one signing key per issuer and returns what a test needs around them. The tokens are
- * signed and verified by `@cadenway/nest-common` itself, loaded on first use, so they are exactly
- * what a real caller sends.
+ * signed and verified by the injected SDK factories, called on first use.
  *
- * @param {TestInternalTokensOptions} options - Service under test and its issuers.
- * @returns {TestInternalTokens} The keys, the environment variables and the signer.
+ * @param {TestInternalTokensOptions<TClaims, TPrincipal>} options - Service under test and its issuers.
+ * @returns {TestInternalTokens<TClaims, TPrincipal>} The keys, the environment variables and the signer.
  * @throws {Error} When no issuer is given.
  */
-export function createTestInternalTokens(options: TestInternalTokensOptions): TestInternalTokens {
+export function createTestInternalTokens<TClaims, TPrincipal>(
+  options: TestInternalTokensOptions<TClaims, TPrincipal>,
+): TestInternalTokens<TClaims, TPrincipal> {
   const issuers: readonly string[] = Object.freeze([...(options.issuers ?? [DEFAULT_ISSUER])]);
   const defaultIssuer: string | undefined = issuers[0];
   if (defaultIssuer === undefined) {
     throw new Error('At least one issuer is required to sign test tokens.');
   }
-  const keys: Map<string, Ed25519PrivateJwk> = new Map<string, Ed25519PrivateJwk>(
-    issuers.map((issuer: string): [string, Ed25519PrivateJwk] => [
+  const keys: Map<string, TestPrivateJwk> = new Map<string, TestPrivateJwk>(
+    issuers.map((issuer: string): [string, TestPrivateJwk] => [
       issuer,
       generateSigningJwk(`${issuer}-test`),
     ]),
   );
-  const trustedIssuers: Readonly<Record<string, readonly Ed25519PublicJwk[]>> = Object.freeze(
+  const trustedIssuers: Readonly<Record<string, readonly TestPublicJwk[]>> = Object.freeze(
     Object.fromEntries(
-      [...keys].map(([issuer, jwk]: [string, Ed25519PrivateJwk]) => [issuer, [publicJwkOf(jwk)]]),
+      [...keys].map(([issuer, jwk]: [string, TestPrivateJwk]) => [issuer, [publicJwkOf(jwk)]]),
     ),
   );
-  const signers: Map<string, Promise<InternalTokenSigner>> = new Map<
+  const signers: Map<string, Promise<TestTokenSigner<TClaims>>> = new Map<
     string,
-    Promise<InternalTokenSigner>
+    Promise<TestTokenSigner<TClaims>>
   >();
-  const verifiers: Map<string, Promise<InternalTokenVerifier>> = new Map<
+  const verifiers: Map<string, Promise<TestTokenVerifier<TPrincipal>>> = new Map<
     string,
-    Promise<InternalTokenVerifier>
+    Promise<TestTokenVerifier<TPrincipal>>
   >();
   /**
    * Function keyOf
@@ -337,11 +372,11 @@ export function createTestInternalTokens(options: TestInternalTokensOptions): Te
    * Returns the signing key of an issuer.
    *
    * @param {string} issuer - Issuer name.
-   * @returns {Ed25519PrivateJwk} Its key.
+   * @returns {TestPrivateJwk} Its key.
    * @throws {Error} When the issuer has no key.
    */
-  const keyOf = (issuer: string): Ed25519PrivateJwk => {
-    const jwk: Ed25519PrivateJwk | undefined = keys.get(issuer);
+  const keyOf = (issuer: string): TestPrivateJwk => {
+    const jwk: TestPrivateJwk | undefined = keys.get(issuer);
     if (jwk === undefined) {
       throw new Error(`No test key for the issuer ${issuer}: list it in "issuers".`);
     }
@@ -353,22 +388,16 @@ export function createTestInternalTokens(options: TestInternalTokensOptions): Te
    * @description
    * Signs a token as one issuer, creating its signer on first use.
    *
-   * @param {InternalTokenClaims} claims - Who the call is made for.
+   * @param {TClaims} claims - Who the call is made for.
    * @param {SignTestTokenOptions} signOptions - Another issuer or audience.
    * @returns {Promise<string>} The compact JWT.
    */
-  const sign = async (
-    claims: InternalTokenClaims,
-    signOptions: SignTestTokenOptions = {},
-  ): Promise<string> => {
+  const sign = async (claims: TClaims, signOptions: SignTestTokenOptions = {}): Promise<string> => {
     const issuer: string = signOptions.issuer ?? defaultIssuer;
-    const privateJwk: Ed25519PrivateJwk = keyOf(issuer);
-    let signer: Promise<InternalTokenSigner> | undefined = signers.get(issuer);
+    const privateJwk: TestPrivateJwk = keyOf(issuer);
+    let signer: Promise<TestTokenSigner<TClaims>> | undefined = signers.get(issuer);
     if (signer === undefined) {
-      signer = import('@cadenway/nest-common').then(
-        (common: typeof import('@cadenway/nest-common')): Promise<InternalTokenSigner> =>
-          common.InternalTokenSigner.create({ issuer, privateJwk }),
-      );
+      signer = options.tokenFactories.createSigner({ issuer, privateJwk });
       signers.set(issuer, signer);
     }
     return (await signer).sign(signOptions.audience ?? options.audience, claims);
@@ -387,19 +416,13 @@ export function createTestInternalTokens(options: TestInternalTokensOptions): Te
     }),
     sign,
     authorization: async (
-      claims: InternalTokenClaims,
+      claims: TClaims,
       signOptions: SignTestTokenOptions = {},
     ): Promise<string> => `Bearer ${await sign(claims, signOptions)}`,
-    verify: async (
-      token: string,
-      audience: string = options.audience,
-    ): Promise<InternalPrincipal> => {
-      let verifier: Promise<InternalTokenVerifier> | undefined = verifiers.get(audience);
+    verify: async (token: string, audience: string = options.audience): Promise<TPrincipal> => {
+      let verifier: Promise<TestTokenVerifier<TPrincipal>> | undefined = verifiers.get(audience);
       if (verifier === undefined) {
-        verifier = import('@cadenway/nest-common').then(
-          (common: typeof import('@cadenway/nest-common')): Promise<InternalTokenVerifier> =>
-            common.InternalTokenVerifier.create({ audience, trustedIssuers }),
-        );
+        verifier = options.tokenFactories.createVerifier({ audience, trustedIssuers });
         verifiers.set(audience, verifier);
       }
       return (await verifier).verify(token.replace(/^Bearer /u, ''));

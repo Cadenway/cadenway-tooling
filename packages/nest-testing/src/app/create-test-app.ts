@@ -1,6 +1,10 @@
 import type { AnyHandler } from 'msw';
 
-import { createTestInternalTokens, type TestInternalTokens } from '../auth/internal-tokens.js';
+import {
+  createTestInternalTokens,
+  type TestInternalTokens,
+  type TestTokenFactories,
+} from '../auth/internal-tokens.js';
 import { startHttpFakes, type HttpFakes } from '../http/http-fakes.js';
 import type { EventRecorder } from '../nats/event-recorder.js';
 import { grantOf, natsUserNameOf, type TestNatsUser } from '../nats/nats-users.js';
@@ -54,7 +58,7 @@ export interface TestApplication {
  * @description
  * The disposable dependencies started for one application under test.
  */
-export interface TestInfrastructure {
+export interface TestInfrastructure<TClaims, TPrincipal> {
   // #region Properties
   /**
    * Property env
@@ -119,10 +123,10 @@ export interface TestInfrastructure {
    * @description
    * Internal token keys of the run: the application trusts them, the test signs with them.
    *
-   * @type {TestInternalTokens}
+   * @type {TestInternalTokens<TClaims, TPrincipal>}
    * @readonly
    */
-  readonly tokens: TestInternalTokens;
+  readonly tokens: TestInternalTokens<TClaims, TPrincipal>;
 
   /**
    * Property http
@@ -146,7 +150,10 @@ export interface TestInfrastructure {
  *
  * @template TApp Type of the application under test.
  */
-export interface CreateTestAppOptions<TApp extends TestApplication> {
+export interface CreateTestAppOptions<TApp extends TestApplication, TClaims, TPrincipal> {
+  /** Token factories from the SDK installed by the service under test. */
+  readonly tokenFactories: TestTokenFactories<TClaims, TPrincipal>;
+
   // #region Properties
   /**
    * Property service
@@ -169,10 +176,10 @@ export interface CreateTestAppOptions<TApp extends TestApplication> {
    * validates its configuration when it is declared must see the test environment.
    * `createTestApp` then calls `init`; the application never listens.
    *
-   * @type {(infrastructure: TestInfrastructure) => Promise<TApp>}
+   * @type {(infrastructure: TestInfrastructure<TClaims, TPrincipal>) => Promise<TApp>}
    * @readonly
    */
-  readonly create: (infrastructure: TestInfrastructure) => Promise<TApp>;
+  readonly create: (infrastructure: TestInfrastructure<TClaims, TPrincipal>) => Promise<TApp>;
 
   /**
    * Property postgres
@@ -275,10 +282,12 @@ export interface CreateTestAppOptions<TApp extends TestApplication> {
    * Further environment variables, or a function that derives them from the started
    * dependencies. They replace the default ones of the same name.
    *
-   * @type {TestEnvironment | ((infrastructure: TestInfrastructure) => TestEnvironment) | undefined}
+   * @type {TestEnvironment | ((infrastructure: TestInfrastructure<TClaims, TPrincipal>) => TestEnvironment) | undefined}
    * @readonly
    */
-  readonly env?: TestEnvironment | ((infrastructure: TestInfrastructure) => TestEnvironment);
+  readonly env?:
+    | TestEnvironment
+    | ((infrastructure: TestInfrastructure<TClaims, TPrincipal>) => TestEnvironment);
 
   /**
    * Property http
@@ -312,7 +321,11 @@ export interface CreateTestAppOptions<TApp extends TestApplication> {
  *
  * @template TApp Type of the application under test.
  */
-export interface TestApp<TApp extends TestApplication> extends TestInfrastructure {
+export interface TestApp<
+  TApp extends TestApplication,
+  TClaims,
+  TPrincipal,
+> extends TestInfrastructure<TClaims, TPrincipal> {
   // #region Properties
   /**
    * Property app
@@ -440,12 +453,12 @@ function applyEnvironment(env: TestEnvironment): () => void {
  * error is thrown. Call `close` in `afterAll`.
  *
  * @template TApp Type of the application under test.
- * @param {CreateTestAppOptions<TApp>} options - Service name, dependencies and application factory.
- * @returns {Promise<TestApp<TApp>>} The application and its dependencies.
+ * @param {CreateTestAppOptions<TApp, TClaims, TPrincipal>} options - Service name, dependencies and application factory.
+ * @returns {Promise<TestApp<TApp, TClaims, TPrincipal>>} The application and its dependencies.
  */
-export async function createTestApp<TApp extends TestApplication>(
-  options: CreateTestAppOptions<TApp>,
-): Promise<TestApp<TApp>> {
+export async function createTestApp<TApp extends TestApplication, TClaims, TPrincipal>(
+  options: CreateTestAppOptions<TApp, TClaims, TPrincipal>,
+): Promise<TestApp<TApp, TClaims, TPrincipal>> {
   const stops: Stoppable[] = [];
   /**
    * Function unwind
@@ -457,8 +470,9 @@ export async function createTestApp<TApp extends TestApplication>(
    */
   const unwind = (): Promise<void> => stopAll(stops.splice(0).reverse());
   try {
-    const tokens: TestInternalTokens = createTestInternalTokens({
+    const tokens: TestInternalTokens<TClaims, TPrincipal> = createTestInternalTokens({
       audience: options.service,
+      tokenFactories: options.tokenFactories,
       ...(options.issuers === undefined ? {} : { issuers: options.issuers }),
     });
     const natsUser: TestNatsUser = options.natsUser ?? { name: natsUserNameOf(options.service) };
@@ -529,7 +543,7 @@ export async function createTestApp<TApp extends TestApplication>(
         : { NATS_URL: nats.url, NATS_USER: nats.user.user, NATS_PASSWORD: nats.user.password }),
       ...(redis === undefined ? {} : { REDIS_URL: redis.url }),
     };
-    const infrastructure: TestInfrastructure = {
+    const infrastructure: TestInfrastructure<TClaims, TPrincipal> = {
       get env(): TestEnvironment {
         return env;
       },
@@ -560,7 +574,11 @@ export async function createTestApp<TApp extends TestApplication>(
     await app.init();
 
     const descriptors: PropertyDescriptorMap = Object.getOwnPropertyDescriptors(infrastructure);
-    return Object.defineProperties({ app, close: unwind }, descriptors) as TestApp<TApp>;
+    return Object.defineProperties({ app, close: unwind }, descriptors) as TestApp<
+      TApp,
+      TClaims,
+      TPrincipal
+    >;
   } catch (error) {
     try {
       await unwind();

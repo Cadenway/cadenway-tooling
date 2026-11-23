@@ -23,6 +23,9 @@ export {
   type SignTestTokenOptions,
   type TestInternalTokens,
   type TestInternalTokensOptions,
+  type TestPrivateJwk,
+  type TestPublicJwk,
+  type TestTokenFactories,
 } from './auth/internal-tokens.js';
 export { NATS_IMAGE, POSTGRES_IMAGE, REDIS_IMAGE } from './containers/images.js';
 export { startHttpFakes, type HttpFakes, type HttpFakesOptions } from './http/http-fakes.js';
