@@ -1,15 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
+import { report, type ArchitectureFinding } from './diagnostics.js';
 import ts from 'typescript';
 import { exportedNames, importOrigins } from './exports.js';
-import {
-  isWithin,
-  report,
-  type ArchitectureFinding,
-  type ImportEdge,
-  type Project,
-  type ProjectFile,
-} from './project.js';
+import { isWithin, type ImportEdge, type Project, type ProjectFile } from './project.js';
 
 const APPLICATION_ROOT = 'src/app';
 const LAYERS = new Set(['core', 'features', 'layouts', 'shared']);

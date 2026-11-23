@@ -1,15 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
+import { report, type ArchitectureFinding } from './diagnostics.js';
 import ts from 'typescript';
 import { exportedNames, symbolOrigins } from './exports.js';
-import {
-  isTestFile,
-  isWithin,
-  posix,
-  report,
-  type ArchitectureFinding,
-  type Project,
-} from './project.js';
+import { isTestFile, isWithin, posix, type Project } from './project.js';
 
 interface Entry {
   readonly root: string;

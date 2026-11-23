@@ -1,4 +1,3 @@
-import { PRIORITY_KEYS, STATUS_CATEGORY_BY_KEY, STATUS_KEYS } from '@cadenway/contracts';
 import { describe, expect, it } from 'vitest';
 
 import type { FixturePerson } from './atelier-nord.js';
@@ -154,14 +153,14 @@ describe('fixtures.sprint14', () => {
     }
   });
 
-  it('only uses statuses, priorities and people that exist', () => {
+  it('only uses statuses and people defined by the fixtures', () => {
+    const statusKeys = new Set(sprint.statuses.map((status) => status.key));
     const people: string[] = fixtures
       .atelierNord()
       .members.map((member: FixturePerson) => member.initials);
 
     for (const task of sprint.tasks) {
-      expect(STATUS_KEYS).toContain(task.status);
-      expect(PRIORITY_KEYS).toContain(task.priority);
+      expect(statusKeys.has(task.status)).toBe(true);
       expect(task.estimateMinutes).toBeGreaterThan(0);
       for (const initials of [
         ...task.assignees,
@@ -189,16 +188,18 @@ describe('fixtures.sprint14', () => {
 });
 
 describe('fixtures.statuses', () => {
-  it('lists the ten statuses of the contracts, with their categories', () => {
+  it('lists ten distinct statuses in workflow order', () => {
     const statuses: readonly FixtureStatus[] = fixtures.statuses();
 
-    expect(statuses.map((status: FixtureStatus) => status.key)).toEqual([...STATUS_KEYS]);
-    for (const status of statuses) {
-      expect(status.category).toBe(STATUS_CATEGORY_BY_KEY[status.key]);
-    }
-    expect(statuses.find((status: FixtureStatus) => status.key === 'review')?.label).toBe(
-      'En revue',
-    );
+    expect(statuses).toHaveLength(10);
+    expect(new Set(statuses.map((status) => status.key)).size).toBe(10);
+    expect(statuses[0]).toEqual({ key: 'triage', label: 'À trier', category: 'open' });
+    expect(statuses.find((status) => status.key === 'review')).toEqual({
+      key: 'review',
+      label: 'En revue',
+      category: 'active',
+    });
+    expect(statuses.at(-1)).toEqual({ key: 'cancelled', label: 'Annulé', category: 'closed' });
     expect(fixtures.sprint14().statuses).toBe(statuses);
   });
 });

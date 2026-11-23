@@ -1,5 +1,3 @@
-import type { PriorityKey, Recurrence, StatusCategory, StatusKey } from '@cadenway/contracts';
-
 import type { FixtureInitials } from './atelier-nord.js';
 import { fixtureId } from './fixture-id.js';
 
@@ -15,12 +13,11 @@ export interface FixtureStatus {
    * Property key
    *
    * @description
-   * Key of the status, one of the shared enumeration of `@cadenway/contracts`.
+   * Key of a default status in the mockup.
    *
-   * @type {StatusKey}
    * @readonly
    */
-  readonly key: StatusKey;
+  readonly key: (typeof STATUS_ROWS)[number][0];
 
   /**
    * Property label
@@ -39,10 +36,9 @@ export interface FixtureStatus {
    * @description
    * Category the counters and dashboards read.
    *
-   * @type {StatusCategory}
    * @readonly
    */
-  readonly category: StatusCategory;
+  readonly category: (typeof STATUS_ROWS)[number][2];
   // #endregion
 }
 
@@ -308,12 +304,12 @@ export interface FixtureComment {
 }
 
 /**
- * Interface FixtureTask
+ * Interface FixtureTaskFields
  *
  * @description
  * One task of Sprint 14, as the mockup writes it.
  */
-export interface FixtureTask {
+interface FixtureTaskFields<Priority extends string, Recurrence extends string> {
   // #region Properties
   /**
    * Property id
@@ -388,10 +384,10 @@ export interface FixtureTask {
    * @description
    * Status key.
    *
-   * @type {StatusKey}
+   * @type {FixtureStatus['key']}
    * @readonly
    */
-  readonly status: StatusKey;
+  readonly status: FixtureStatus['key'];
 
   /**
    * Property priority
@@ -399,10 +395,10 @@ export interface FixtureTask {
    * @description
    * Priority key.
    *
-   * @type {PriorityKey}
+   * @type {Priority}
    * @readonly
    */
-  readonly priority: PriorityKey;
+  readonly priority: Priority;
 
   /**
    * Property assignees
@@ -569,10 +565,11 @@ export interface Sprint14Fixture {
  *
  * @description
  * What is written for each task below: everything but the values derived from the id.
- *
- * @type {Omit<FixtureTask, 'uuid' | 'number'>}
  */
-type TaskSource = Omit<FixtureTask, 'uuid' | 'number'>;
+type TaskSource<Priority extends string, Recurrence extends string> = Omit<
+  FixtureTaskFields<Priority, Recurrence>,
+  'uuid' | 'number'
+>;
 
 /**
  * Function task
@@ -580,10 +577,12 @@ type TaskSource = Omit<FixtureTask, 'uuid' | 'number'>;
  * @description
  * Completes one task with its number and its stable UUID, and freezes it.
  *
- * @param {TaskSource} source - The task as the mockup writes it.
- * @returns {FixtureTask} The frozen task.
+ * @param source - The task as the mockup writes it.
+ * @returns The frozen task.
  */
-function task(source: TaskSource): FixtureTask {
+function task<const Priority extends string, const Recurrence extends string>(
+  source: TaskSource<Priority, Recurrence>,
+): FixtureTaskFields<Priority, Recurrence> {
   const number: number = Number(source.id.slice(source.id.indexOf('-') + 1));
   return Object.freeze({
     ...source,
@@ -601,30 +600,23 @@ function task(source: TaskSource): FixtureTask {
 }
 
 /**
- * Constant STATUSES
- *
- * @description
- * The ten statuses (`STATUSES` of `App.dc.html`).
- *
- * @type {readonly FixtureStatus[]}
+ * Source rows for the ten statuses (`STATUSES` of `App.dc.html`).
  */
+const STATUS_ROWS = [
+  ['triage', 'À trier', 'open'],
+  ['backlog', 'À planifier', 'open'],
+  ['todo', 'À faire', 'open'],
+  ['progress', 'En cours', 'active'],
+  ['review', 'En revue', 'active'],
+  ['testing', 'En validation', 'active'],
+  ['waiting', 'En attente', 'active'],
+  ['blocked', 'Bloqué', 'active'],
+  ['done', 'Terminé', 'closed'],
+  ['cancelled', 'Annulé', 'closed'],
+] as const;
+
 const STATUSES: readonly FixtureStatus[] = Object.freeze(
-  (
-    [
-      ['triage', 'À trier', 'open'],
-      ['backlog', 'À planifier', 'open'],
-      ['todo', 'À faire', 'open'],
-      ['progress', 'En cours', 'active'],
-      ['review', 'En revue', 'active'],
-      ['testing', 'En validation', 'active'],
-      ['waiting', 'En attente', 'active'],
-      ['blocked', 'Bloqué', 'active'],
-      ['done', 'Terminé', 'closed'],
-      ['cancelled', 'Annulé', 'closed'],
-    ] as const
-  ).map(([key, label, category]: readonly [StatusKey, string, StatusCategory]): FixtureStatus =>
-    Object.freeze({ key, label, category }),
-  ),
+  STATUS_ROWS.map(([key, label, category]) => Object.freeze({ key, label, category })),
 );
 
 /**
@@ -672,10 +664,8 @@ const SPRINT: FixtureSprint = Object.freeze({
  * The tasks the mockup writes by hand in Sprint 14 (`TASKS` and `TASK_META` of `App.dc.html`),
  * then the subtasks it writes by hand under `CAD-482` and `CAD-488`. The tasks and subtasks the
  * mockup generates in a loop to fill its lists (`CAD-500` and above) are left out.
- *
- * @type {readonly FixtureTask[]}
  */
-const TASKS: readonly FixtureTask[] = Object.freeze([
+const TASKS = Object.freeze([
   task({
     id: 'CAD-482',
     parentId: null,
@@ -1044,6 +1034,11 @@ const TASKS: readonly FixtureTask[] = Object.freeze([
     comments: [],
   }),
 ]);
+
+type TaskExample = (typeof TASKS)[number];
+
+/** A Sprint 14 task, with priority and recurrence values taken from the mockup's task data. */
+export type FixtureTask = FixtureTaskFields<TaskExample['priority'], TaskExample['recurrence']>;
 
 /**
  * Constant TASKS_BY_ID

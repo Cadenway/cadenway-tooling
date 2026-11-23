@@ -1,6 +1,6 @@
 {
   "name": "@cadenway/nest-testing",
-  "version": "0.1.0",
+  "version": "0.6.0",
   "description": "Test helpers for the Cadenway NestJS services and gateways.",
   "license": "UNLICENSED",
   "repository": {
@@ -38,8 +38,7 @@
     "typescript": "catalog:"
   },
   "peerDependencies": {
-    "@cadenway/contracts": ">=0.2.0 <1.0.0",
-    "@cadenway/nest-messaging": ">=0.0.1 <1.0.0",
+    "@cadenway/nest-messaging": "^0.0.1 || ^0.2.0",
     "@nestjs/testing": "catalog:",
     "drizzle-orm": "catalog:",
     "pg": "catalog:",
@@ -47,9 +46,6 @@
     "vitest": "catalog:"
   },
   "peerDependenciesMeta": {
-    "@cadenway/contracts": {
-      "optional": true
-    },
     "@cadenway/nest-messaging": {
       "optional": true
     },
@@ -61,7 +57,6 @@
     }
   },
   "devDependencies": {
-    "@cadenway/contracts": "^0.2.0",
     "@nestjs/testing": "catalog:",
     "@types/node": "catalog:",
     "drizzle-orm": "catalog:",
