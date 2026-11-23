@@ -834,6 +834,95 @@ it('accepts a domain-free strict query whose public contracts and Nest wiring ma
   expect(withProject(STRICT_SERVICE, 'service', [], 'strict')).toEqual([]);
 });
 
+const DEMO_AUXILIARY_ENTRY = 'composition/modules/demo-reader.module';
+const DEMO_AUXILIARY_FILE = `src/modules/demo/${DEMO_AUXILIARY_ENTRY}.ts`;
+const DEMO_MANIFEST = 'src/modules/demo/MODULE.md';
+const REPORTS_WIRING = 'src/modules/reports/reports.module.ts';
+const STRICT_AUXILIARY_WIRING: Readonly<Record<string, string>> = {
+  ...STRICT_SERVICE,
+  [DEMO_MANIFEST]:
+    MODULE_DOC +
+    `| ${DEMO_AUXILIARY_ENTRY} | reports |\n| public/lifecycle/read-demo | reports |\n`,
+  'src/modules/demo/demo.module.ts': [
+    "import { Module } from '@nestjs/common';",
+    "import { ReportsModule } from '../reports/reports.module.js';",
+    '@Module({ imports: [ReportsModule] })',
+    'export class DemoModule {}',
+  ].join('\n'),
+  'src/modules/reports/MODULE.md': MODULE_DOC + '| reports.module | demo |\n',
+  [REPORTS_WIRING]: [
+    "import { Module } from '@nestjs/common';",
+    `import { DemoReaderModule } from '../demo/${DEMO_AUXILIARY_ENTRY}.js';`,
+    '@Module({ imports: [DemoReaderModule] })',
+    'export class ReportsModule {}',
+  ].join('\n'),
+  [DEMO_AUXILIARY_FILE]: [
+    "import { Module } from '@nestjs/common';",
+    "import { ReadDemo } from '../../public/lifecycle/read-demo.js';",
+    '@Module({ providers: [ReadDemo], exports: [ReadDemo] })',
+    'export class DemoReaderModule {}',
+  ].join('\n'),
+};
+
+it('accepts independently imported Nest wiring for a declared consumer and checks its provider exports', () => {
+  expect(withProject(STRICT_AUXILIARY_WIRING, 'service', [], 'strict')).toEqual([]);
+  const auxiliarySource = STRICT_AUXILIARY_WIRING[DEMO_AUXILIARY_FILE] ?? '';
+  expect(
+    withProject(
+      {
+        ...STRICT_AUXILIARY_WIRING,
+        [DEMO_AUXILIARY_FILE]: auxiliarySource.replace('exports: [ReadDemo]', 'exports: []'),
+      },
+      'service',
+      [],
+      'strict',
+    ),
+  ).toContainEqual(expect.objectContaining({ rule: 'strict-public-nest-export' }));
+});
+
+it('rejects additional wiring without a documented consumer or an explicit module class', () => {
+  const findings = withProject(
+    {
+      ...STRICT_AUXILIARY_WIRING,
+      [DEMO_MANIFEST]: MODULE_DOC + '| public/lifecycle/read-demo | reports |\n',
+      [DEMO_AUXILIARY_FILE]: 'export class DemoReaderModule {}',
+    },
+    'service',
+    [],
+    'strict',
+  );
+  expect(findings).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ file: REPORTS_WIRING, rule: 'intermodule-private' }),
+      expect.objectContaining({ file: DEMO_AUXILIARY_FILE, rule: 'strict-public-entry' }),
+      expect.objectContaining({ file: DEMO_AUXILIARY_FILE, rule: 'strict-auxiliary-wiring' }),
+    ]),
+  );
+});
+
+it('still rejects eagerly cyclic wiring and implicit global providers in an additional module', () => {
+  const findings = withProject(
+    {
+      ...STRICT_AUXILIARY_WIRING,
+      [DEMO_AUXILIARY_FILE]: [
+        "import { Global as Shared, Module } from '@nestjs/common';",
+        "import { ReportsModule } from '../../../reports/reports.module.js';",
+        '@Shared() @Module({ imports: [ReportsModule] })',
+        'export class DemoReaderModule {}',
+      ].join('\n'),
+    },
+    'service',
+    [],
+    'strict',
+  );
+  expect(findings).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ rule: 'execution-cycle' }),
+      expect.objectContaining({ file: DEMO_AUXILIARY_FILE, rule: 'strict-auxiliary-wiring' }),
+    ]),
+  );
+});
+
 it.each(['service', 'gateway'] as const)(
   'requires tests/ for cross-layer integration sources in the strict %s profile',
   (profile) => {

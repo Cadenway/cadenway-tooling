@@ -61,6 +61,12 @@ When adding a new entry to a kit package, update the verifier's public entry lis
 `<module>.module.ts` can declare tokens and factory providers inline. The optional
 `composition/` directory holds wiring split into separate files. Strict verification accepts both.
 
+When two capabilities need different parts of each other's wiring, put the independent providers
+in `composition/modules/<name>.module.ts`. Export one named, local Nest module and import it
+explicitly in the consuming capability. Declare the path without `.ts` alongside its consuming
+owners in the producer's `MODULE.md`. The strict checker applies the public provider rules to
+both sets of wiring and still rejects runtime import cycles.
+
 Strict verification ties the named exports of authored `.use-case.ts`, `.input.ts`, `.output.ts`,
 `.port.ts` and `.dto.ts` files to their filename and role, and requires a public instance `execute`
 method on use cases. Keep each named exported contract in its own file and private helpers beside
