@@ -64,10 +64,17 @@ function assertArchive(archive, manifest, scenario) {
   }
   for (const file of distribution) {
     assert.match(file, /^package\/(?:dist\/.+|package\.json|README\.md|CHANGELOG\.md|LICENSE)$/u);
-    assert.doesNotMatch(
-      file,
-      /(?:\/(?:tests?|testing|fixtures?)\/|\.(?:spec|test|int-spec|fixture|mock|harness)\.|\.tsbuildinfo$)/u,
-    );
+    if (scenario.name === 'nest-testing' && file.startsWith('package/dist/fixtures/')) {
+      assert.match(
+        file,
+        /^package\/dist\/fixtures\/(?:atelier-nord|fixture-id|fixtures|sprint-14)\.(?:js(?:\.map)?|d\.ts(?:\.map)?)$/u,
+      );
+    } else {
+      assert.doesNotMatch(
+        file,
+        /(?:\/(?:tests?|testing|fixtures?)\/|\.(?:spec|test|int-spec|fixture|mock|harness)\.|\.tsbuildinfo$)/u,
+      );
+    }
     if (file.startsWith('package/dist/')) {
       assert.match(file, /\.(?:js(?:\.map)?|d\.ts(?:\.map)?)$/u);
     }

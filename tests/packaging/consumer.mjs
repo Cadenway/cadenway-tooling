@@ -10,7 +10,10 @@ assert.deepEqual(Object.keys(unexpectedExports), []);
 
 const isNest = verifier === 'verifyNestArchitecture';
 if (isNest) {
-  assert.deepEqual(Object.keys(await import(packageName)), []);
+  const { fixtureId, fixtures, ...unexpectedRootExports } = await import(packageName);
+  assert.equal(typeof fixtureId, 'function');
+  assert.ok(fixtures.sprint14().task('CAD-482'));
+  assert.deepEqual(Object.keys(unexpectedRootExports), []);
 } else {
   await assert.rejects(import(packageName), { code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' });
 }
