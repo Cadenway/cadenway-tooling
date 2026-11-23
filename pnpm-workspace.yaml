@@ -10,9 +10,15 @@ catalog:
   typescript: ~6.0.3
   vitest: ^5.1.0
 
+# Consumers provide the optional Service Kit peer when needed.
+autoInstallPeers: false
+
 # Disable pnpm's default release-age delay.
 minimumReleaseAge: 0
 trustPolicy: no-downgrade
+overrides:
+  # Testcontainers' archive helper still resolves Glob 10.
+  'archiver-utils@5.0.2>glob': 14.0.6
 allowBuilds:
   cpu-features: false
   protobufjs: false

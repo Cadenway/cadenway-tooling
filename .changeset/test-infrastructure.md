@@ -11,4 +11,6 @@ Add the `@cadenway/nest-testing/infrastructure` entry point for integration test
 - `createTestInternalTokens` generates Ed25519 keys for the run and signs and verifies internal tokens with `@cadenway/nest-common`.
 - `startHttpFakes` and the re-exported `http`, `HttpResponse`, `delay` and `passthrough` of `msw` fake third-party HTTP: a request no handler answers fails instead of reaching the network.
 
-`@cadenway/nest-common` becomes an optional peer (`>=0.2.0 <1.0.0`), used by the internal token helpers. The optional `@cadenway/nest-messaging` peer (`>=0.0.1 <1.0.0`) accepts 0.1.x; the specs run a service built on `MessagingModule` 0.1. `@nats-io/jetstream` and `@nats-io/transport-node` become dependencies; `@testcontainers/nats` is no longer one.
+The caller supplies the signer and verifier factories from its installed Service Kit, so Toolkit
+can reuse real authentication without a private runtime dependency. `@nats-io/jetstream` and
+`@nats-io/transport-node` become dependencies. `@testcontainers/nats` is no longer needed.

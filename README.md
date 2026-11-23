@@ -10,16 +10,36 @@ Development packages for Cadenway's applications, libraries and services.
 ```sh
 pnpm install --frozen-lockfile
 pnpm quality
-pnpm test:integration # starts disposable PostgreSQL, NATS and Redis: Docker must be running
+pnpm test:integration
 ```
+
+The public checks use public dependencies. To run the Service Kit integration tests, use an
+authorized disposable checkout with access to the private packages and a running Docker engine.
+
+```sh
+pnpm --filter @cadenway/nest-testing add -D -E @cadenway/nest-common@0.14.0 @cadenway/nest-messaging@0.8.0
+pnpm test:integration:service-kit
+```
+
+The command pins the published SDK exercised by the integration tests. The temporary manifest and
+lockfile changes belong only to that checkout. The public workflow runs neither this install nor
+the private SDK tests.
+
+For repository assistant instructions, examples, and read-only review exercises, see
+[Code quality for assistants](docs/assistant-code-quality.md).
 
 ## Release and adoption
 
-The package names and exports are unchanged. Changesets versions releases and the release workflow publishes to GitHub Packages.
+The package names and existing exports are unchanged. Changesets versions releases and the release workflow publishes to GitHub Packages.
 
 1. Land the service-kit change that removes `nest-testing` from its workspace and release plan. The design-system adoption can follow the first Angular tooling release.
-2. Grant this repository Actions write access to the existing `@cadenway/nest-testing` package and read access to `@cadenway/nest-messaging`, `@cadenway/contracts` and `@cadenway/nest-common` for the frozen install. The `nest-testing` package manifest points to this repository. When updating the package's GitHub repository link, preserve the published versions and existing consumers' read access, including access inherited from the original repository.
+2. Grant this repository Actions write access to the existing `@cadenway/nest-testing` package. The `nest-testing` package manifest points to this repository. When updating the package's GitHub repository link, preserve the published versions and existing consumers' read access, including access inherited from the original repository.
 3. Configure the Cadenway GitHub App access for this repository, including the `CADENWAY_DEPLOY_APP_CLIENT_ID` variable and the `CADENWAY_DEPLOY_APP_PRIVATE_KEY` secret in the protected `release` environment. Keep the release environment restricted to `main`.
 4. After the Changesets release, grant consumer repositories Actions read access to `@cadenway/angular-testing`. Update each consumer's development dependency through pnpm and commit its generated lockfile. Run `pnpm install --frozen-lockfile` and `pnpm test:architecture`, then add the architecture check to its quality script and CI in the same change. Keep local exceptions beside each consumer's suite.
 
 The Nest package's optional messaging peer resolves from the published service kit. Runtime packages and the [hexagonal architecture guide](https://github.com/Cadenway/cadenway-service-kit/blob/main/docs/hexagonal-architecture.md) remain owned by the service kit.
+
+The V2 Nest verifier is an opt-in change. Release `@cadenway/nest-testing` before editing consumer
+dependency pins or enabling `convention: 'strict'`. Adopt it in services first, then in both
+gateways. The strict suite fails on every finding, including existing deviations. Deliver source
+layout and wiring corrections separately from the verifier and its documentation.
