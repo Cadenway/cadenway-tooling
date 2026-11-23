@@ -42,8 +42,11 @@ function ping(url: string): Promise<string> {
 }
 
 it('owns the worker state until one shared close finishes', async () => {
-  const pendingClose = Promise.withResolvers<void>();
-  const close = vi.fn(() => pendingClose.promise);
+  let finishClose!: () => void;
+  const pendingClose = new Promise<void>((resolve) => {
+    finishClose = resolve;
+  });
+  const close = vi.fn(() => pendingClose);
   const options = {
     service: 'api-gateway',
     tokenFactories,
@@ -59,7 +62,7 @@ it('owns the worker state until one shared close finishes', async () => {
     expect(app.close()).toBe(closing);
     await expect(createTestApp(options)).rejects.toThrow('Close the current test application');
   } finally {
-    pendingClose.resolve();
+    finishClose();
     await app.close();
   }
 
