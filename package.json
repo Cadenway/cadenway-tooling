@@ -16,9 +16,11 @@
     "test:architecture": "pnpm build && node --test tests/architecture/*.spec.mjs && vitest run packages/nest-testing/src/architecture.spec.ts",
     "test:fixtures": "vitest run --project unit packages/nest-testing/src/fixtures/fixtures.spec.ts",
     "test:packaging": "node --test tests/packaging/archives.test.mjs",
-    "quality": "pnpm format:check && pnpm typecheck && pnpm test:architecture && pnpm test:fixtures && pnpm test:packaging",
+    "quality": "pnpm format:check && pnpm typecheck && pnpm test:architecture && pnpm test --exclude \"**/architecture.spec.ts\" && pnpm test:packaging",
     "release": "pnpm build && changeset publish",
-    "changeset": "changeset"
+    "changeset": "changeset",
+    "test:integration": "vitest run --project integration",
+    "test:integration:service-kit": "tsc -p packages/nest-testing/tests/service-kit/tsconfig.json --noEmit && vitest run --project service-kit"
   },
   "devDependencies": {
     "@cadenway/angular-testing": "workspace:*",

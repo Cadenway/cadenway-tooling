@@ -10,6 +10,9 @@ catalog:
   typescript: ~6.0.3
   vitest: ^5.1.0
 
+# Consumers provide the optional Service Kit peer when needed.
+autoInstallPeers: false
+
 # Disable pnpm's default release-age delay.
 minimumReleaseAge: 0
 trustPolicy: no-downgrade

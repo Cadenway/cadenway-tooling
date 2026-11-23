@@ -18,7 +18,7 @@ const cases = [
   {
     name: 'nest-testing',
     baseline: '0.3.0',
-    entries: ['.', './architecture'],
+    entries: ['.', './architecture', './infrastructure'],
     verifier: 'verifyNestArchitecture',
     profile: 'service',
   },
@@ -125,7 +125,16 @@ for (const scenario of cases) {
         `./baselines/${scenario.name}-${scenario.baseline}.mts`,
         import.meta.url,
       );
+      const typeConsumers = ['consumer.mts'];
       copyFileSync(baseline, join(directory, 'consumer.mts'));
+      if (scenario.name === 'nest-testing') {
+        const infrastructureConsumer = 'nest-infrastructure.mts';
+        copyFileSync(
+          new URL('./nest-infrastructure.mts', import.meta.url),
+          join(directory, infrastructureConsumer),
+        );
+        typeConsumers.push(infrastructureConsumer);
+      }
       copyFileSync(new URL('./consumer.mjs', import.meta.url), join(directory, 'consumer.mjs'));
       execFileSync(
         process.execPath,
@@ -136,7 +145,7 @@ for (const scenario of cases) {
           '--strict',
           '--module',
           'NodeNext',
-          'consumer.mts',
+          ...typeConsumers,
         ],
         { cwd: directory, encoding: 'utf-8' },
       );

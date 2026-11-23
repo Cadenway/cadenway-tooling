@@ -14,6 +14,16 @@ if (isNest) {
   assert.equal(typeof fixtureId, 'function');
   assert.ok(fixtures.sprint14().task('CAD-482'));
   assert.deepEqual(Object.keys(unexpectedRootExports), []);
+  const infrastructure = await import(`${packageName}/infrastructure`);
+  for (const helper of [
+    'createTestApp',
+    'createTestInternalTokens',
+    'startTestDatabase',
+    'startTestNats',
+    'startTestRedis',
+  ]) {
+    assert.equal(typeof infrastructure[helper], 'function', helper);
+  }
 } else {
   await assert.rejects(import(packageName), { code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' });
 }
