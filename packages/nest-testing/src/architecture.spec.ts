@@ -942,6 +942,36 @@ it('accepts an explicit local named export but rejects a type-only module export
   );
 });
 
+it('requires auxiliary provider wiring for every declared public consumer', () => {
+  const files = {
+    ...STRICT_AUXILIARY_WIRING,
+    [DEMO_MANIFEST]:
+      MODULE_DOC +
+      `| ${DEMO_AUXILIARY_ENTRY} | reports |\n| public/lifecycle/read-demo | reports, audits |\n`,
+    'src/modules/audits/MODULE.md': MODULE_DOC,
+    'src/modules/audits/audits.module.ts':
+      'import { Module } from "@nestjs/common"; @Module({}) export class AuditsModule {}',
+  };
+  expect(withProject(files, 'service', [], 'strict')).toContainEqual(
+    expect.objectContaining({
+      file: DEMO_PUBLIC_ENTRY,
+      rule: 'strict-public-nest-export',
+      message: 'Export "ReadDemo" through auxiliary wiring declared for audits.',
+    }),
+  );
+  expect(
+    withProject(
+      {
+        ...files,
+        'src/modules/demo/demo.module.ts': STRICT_SERVICE['src/modules/demo/demo.module.ts'] ?? '',
+      },
+      'service',
+      [],
+      'strict',
+    ),
+  ).toEqual([]);
+});
+
 it('still rejects eagerly cyclic wiring and implicit global providers in an additional module', () => {
   const findings = withProject(
     {
@@ -962,6 +992,32 @@ it('still rejects eagerly cyclic wiring and implicit global providers in an addi
       expect.objectContaining({ rule: 'execution-cycle' }),
       expect.objectContaining({ file: DEMO_AUXILIARY_FILE, rule: 'strict-auxiliary-wiring' }),
     ]),
+  );
+});
+
+it('rejects a global module imported by an explicitly exported additional module', () => {
+  const findings = withProject(
+    {
+      ...STRICT_AUXILIARY_WIRING,
+      [DEMO_AUXILIARY_FILE]: [
+        "import { Global as Shared, Module } from '@nestjs/common';",
+        "import { ReadDemo } from '../../public/lifecycle/read-demo.js';",
+        '@Shared() @Module({})',
+        'class PrivateDemoModule {}',
+        '@Module({ imports: [PrivateDemoModule], providers: [ReadDemo], exports: [ReadDemo] })',
+        'export class DemoReaderModule {}',
+      ].join('\n'),
+    },
+    'service',
+    [],
+    'strict',
+  );
+  expect(findings).toContainEqual(
+    expect.objectContaining({
+      file: DEMO_AUXILIARY_FILE,
+      rule: 'strict-auxiliary-wiring',
+      message: 'Import additional wiring explicitly instead of marking it @Global.',
+    }),
   );
 });
 

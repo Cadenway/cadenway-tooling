@@ -414,11 +414,11 @@ function checkManifest(
   sources: ReadonlyMap<string, ts.SourceFile>,
   entries: readonly ts.SourceFile[],
   owners: ReadonlySet<string>,
-): void {
+): ReadonlyMap<string, readonly string[]> {
   const file = `${owner.root}/MODULE.md`;
   const fullPath = resolve(options.rootDir, file);
   const rows = existsSync(fullPath) ? publicEntryRows(readFileSync(fullPath, 'utf8')) : [];
-  const known = new Set<string>();
+  const known = new Map<string, readonly string[]>();
   const wiring = basename(owner.wiring, '.ts');
   for (const { entry, consumers, line } of rows) {
     if (entry === 'None' && consumers.length === 1 && consumers[0] === 'None' && rows.length === 1)
@@ -436,7 +436,7 @@ function checkManifest(
       );
       continue;
     }
-    known.add(entry);
+    known.set(entry, consumers);
     const invalid = consumers.filter(
       (consumer, index) =>
         !owners.has(consumer) || consumer === owner.name || consumers.indexOf(consumer) !== index,
@@ -461,6 +461,7 @@ function checkManifest(
       );
     }
   }
+  return known;
 }
 
 function checkAuxiliaryWiring(
@@ -490,11 +491,13 @@ function checkAuxiliaryWiring(
     );
     return undefined;
   }
-  const names = (ts.getDecorators(declaration) ?? [])
-    .map((decorator) => decorator.expression)
-    .filter(ts.isCallExpression)
-    .map((call) => call.expression);
-  if (!names.some((expression) => importedNestDecorator(checker, expression, 'Module'))) {
+  const usesDecorator = (statement: ts.ClassDeclaration, name: string): boolean =>
+    (ts.getDecorators(statement) ?? []).some(
+      ({ expression }) =>
+        ts.isCallExpression(expression) &&
+        importedNestDecorator(checker, expression.expression, name),
+    );
+  if (!usesDecorator(declaration, 'Module')) {
     options.report(
       file,
       'strict-auxiliary-wiring',
@@ -502,11 +505,15 @@ function checkAuxiliaryWiring(
     );
     return undefined;
   }
-  if (names.some((expression) => importedNestDecorator(checker, expression, 'Global'))) {
+  const global = source.statements.find(
+    (statement) => ts.isClassDeclaration(statement) && usesDecorator(statement, 'Global'),
+  );
+  if (global) {
     options.report(
       file,
       'strict-auxiliary-wiring',
       'Import additional wiring explicitly instead of marking it @Global.',
+      typeScriptLine(global),
     );
     return undefined;
   }
@@ -624,25 +631,49 @@ export function verifyStrictPublicContracts(options: PublicContractOptions): voi
   for (const owner of options.modules) {
     const entries = entriesByOwner.get(owner.root) ?? [];
     const auxiliary = wiringByOwner.get(owner.root) ?? [];
-    checkManifest(options, owner, sources, [...entries, ...auxiliary], owners);
+    const consumers = checkManifest(options, owner, sources, [...entries, ...auxiliary], owners);
     const runtime = new Map<ts.Symbol, NamedExport>();
     for (const entry of entries) {
       const approved = checkEntry(options, owner, checker, entry);
       if (approved) runtime.set(approved.symbol, approved);
     }
-    const registered = [
-      ...nestExports(sources.get(owner.wiring), checker),
-      ...auxiliary.flatMap((source) => {
-        const exportedClass = checkAuxiliaryWiring(options, source, checker);
-        return exportedClass ? nestExports(source, checker, exportedClass) : [];
-      }),
-    ];
+    const primary = nestExports(sources.get(owner.wiring), checker);
+    const extensions = auxiliary.flatMap((source) => {
+      const exportedClass = checkAuxiliaryWiring(options, source, checker);
+      if (!exportedClass) return [];
+      const path = repositoryPath(options.rootDir, source.fileName);
+      return [
+        {
+          consumers: consumers.get(path.slice(owner.root.length + 1, -3)) ?? [],
+          providers: nestExports(source, checker, exportedClass),
+        },
+      ];
+    });
+    const registered = [...primary, ...extensions.flatMap((extension) => extension.providers)];
     for (const [symbol, entry] of runtime) {
-      if (!registered.some((item) => item.symbol === symbol)) {
+      if (primary.some((item) => item.symbol === symbol)) continue;
+      const exposing = extensions.filter((extension) =>
+        extension.providers.some((item) => item.symbol === symbol),
+      );
+      if (!exposing.length) {
         options.report(
           owner.wiring,
           'strict-public-nest-export',
           `Include "${entry.node.name.text}" in the @Module exports for ${owner.name}.`,
+        );
+        continue;
+      }
+      const file = repositoryPath(options.rootDir, entry.node.getSourceFile().fileName);
+      const operation = file.slice(owner.root.length + 1, -3);
+      const unavailable = (consumers.get(operation) ?? []).filter(
+        (consumer) => !exposing.some((extension) => extension.consumers.includes(consumer)),
+      );
+      if (unavailable.length) {
+        options.report(
+          file,
+          'strict-public-nest-export',
+          `Export "${entry.node.name.text}" through auxiliary wiring declared for ${unavailable.join(', ')}.`,
+          typeScriptLine(entry.node),
         );
       }
     }
