@@ -1,5 +1,20 @@
 # @cadenway/nest-testing
 
+## 0.6.0
+
+### Minor Changes
+
+- e62f3d6: Support additional Nest module wiring under `composition/modules/<name>.module.ts`. The file
+  exports one local, named, non-global Nest module and must list its authorized consumers in the
+  owning `MODULE.md`. Its provider exports and runtime dependencies are subject to the same public
+  contract and cycle checks as the main capability module.
+
+### Patch Changes
+
+- cc0811a: Reject additional Nest module files that declare a global module, including a private module
+  imported by the exported module. Check that providers exported only through auxiliary wiring are
+  available to every consumer declared for the corresponding public operation.
+
 ## 0.5.2
 
 ### Patch Changes
