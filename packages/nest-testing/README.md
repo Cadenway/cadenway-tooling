@@ -185,11 +185,15 @@ In order, `createTestApp`:
 
 Nothing starts before the call. When a step fails, what already started is stopped and the error
 is thrown. `close` closes the application, stops the recorder and the fakes, restores
-`process.env` and removes the containers; every step runs even when an earlier one fails.
+`process.env` and removes the containers. Every step runs even when an earlier one fails.
+
+Use one active test application per Vitest worker, since it owns the worker's environment and
+HTTP interception. Await `close` before starting the next application.
 
 | Option             | Default           | Effect                                                                                 |
 | ------------------ | ----------------- | -------------------------------------------------------------------------------------- |
 | `service`          | Required          | Names the database (`task-service` gives `task`) and its roles; audience of the tokens |
+| `tokenFactories`   | Required          | Signer and verifier factories of the installed SDK                                     |
 | `create`           | Required          | Builds the application, given the started dependencies                                 |
 | `migrationsFolder` | None              | Drizzle migrations folder (holding `meta/_journal.json`), applied as the migrator      |
 | `migrate`          | None              | Further preparation of the database after the migrations                               |
@@ -377,7 +381,7 @@ containers.
 The tags are those `cadenway-ops` pins in `compose/infra.yaml`; each `start*` function takes an
 `image` option. A service never depends on `testcontainers` itself.
 
-Database consumers install `pg`, its TypeScript declarations, and `drizzle-orm` when running
+Database consumers install `pg` and `drizzle-orm` when running
 migrations. The root fixtures and the static `/architecture` entry point have no Service Kit
 dependency. The opt-in SDK tests use the published signer, verifier and `MessagingModule` to
 exercise the sample application with its own NATS user and inbox.

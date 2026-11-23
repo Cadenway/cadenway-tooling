@@ -18,7 +18,7 @@ export interface TestPrivateJwk extends TestPublicJwk {
 }
 
 interface TestTokenSigner<TClaims> {
-  sign(audience: string, claims: TClaims): Promise<string>;
+  readonly sign: (audience: string, claims: TClaims) => Promise<string>;
 }
 
 interface TestTokenVerifier<TPrincipal> {
@@ -266,7 +266,7 @@ export interface TestInternalTokens<TClaims, TPrincipal> {
    * @returns {Promise<string>} The compact JWT.
    * @throws {Error} When the issuer has no key or the claims are inconsistent.
    */
-  sign(claims: TClaims, options?: SignTestTokenOptions): Promise<string>;
+  readonly sign: (claims: TClaims, options?: SignTestTokenOptions) => Promise<string>;
 
   /**
    * Method authorization
@@ -278,7 +278,7 @@ export interface TestInternalTokens<TClaims, TPrincipal> {
    * @param {SignTestTokenOptions} options - Another issuer or audience.
    * @returns {Promise<string>} `Bearer <token>`.
    */
-  authorization(claims: TClaims, options?: SignTestTokenOptions): Promise<string>;
+  readonly authorization: (claims: TClaims, options?: SignTestTokenOptions) => Promise<string>;
 
   /**
    * Method verify

@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: read
-  packages: read
 
 jobs:
   quality:
@@ -22,11 +21,7 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: pnpm
-          registry-url: https://npm.pkg.github.com
-          scope: '@cadenway'
       - run: pnpm install --frozen-lockfile
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - run: pnpm quality
       # Uses disposable Docker containers and public packages only.
       - run: pnpm test:integration
@@ -43,11 +38,7 @@ jobs:
         with:
           node-version: '24.15.0'
           cache: pnpm
-          registry-url: https://npm.pkg.github.com
-          scope: '@cadenway'
       - run: pnpm install --frozen-lockfile
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - run: pnpm build
       - run: pnpm test:packaging
         env:

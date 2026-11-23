@@ -38,12 +38,13 @@
     "@nats-io/transport-node": "^3.4.0",
     "@testcontainers/postgresql": "^12.2.1",
     "@testcontainers/redis": "^12.2.1",
+    "@types/pg": "^8.23.1",
     "msw": "^3.0.5",
     "testcontainers": "^12.2.1",
     "typescript": "catalog:"
   },
   "peerDependencies": {
-    "@cadenway/nest-messaging": "^0.0.1 || ^0.2.0",
+    "@cadenway/nest-messaging": "^0.0.1 || ^0.2.0 || ^0.8.0",
     "@nestjs/testing": "catalog:",
     "drizzle-orm": "catalog:",
     "pg": "catalog:",
@@ -68,7 +69,6 @@
     "@nestjs/testing": "catalog:",
     "@opentelemetry/api": "^1.10.0",
     "@types/node": "catalog:",
-    "@types/pg": "^8.23.1",
     "@types/supertest": "^7.2.1",
     "drizzle-orm": "catalog:",
     "pg": "catalog:",

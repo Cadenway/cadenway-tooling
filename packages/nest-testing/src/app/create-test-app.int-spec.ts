@@ -1,6 +1,6 @@
 import { connect as connectTcp, type Socket } from 'node:net';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { createTestApp } from './create-test-app.js';
 
@@ -40,6 +40,34 @@ function ping(url: string): Promise<string> {
     });
   });
 }
+
+it('owns the worker state until one shared close finishes', async () => {
+  const pendingClose = Promise.withResolvers<void>();
+  const close = vi.fn(() => pendingClose.promise);
+  const options = {
+    service: 'api-gateway',
+    tokenFactories,
+    postgres: false,
+    nats: false,
+    create: async () => ({ init: async () => {}, close }),
+  };
+
+  const app = await createTestApp(options);
+  try {
+    await expect(createTestApp(options)).rejects.toThrow('Close the current test application');
+    const closing = app.close();
+    expect(app.close()).toBe(closing);
+    await expect(createTestApp(options)).rejects.toThrow('Close the current test application');
+  } finally {
+    pendingClose.resolve();
+    await app.close();
+  }
+
+  expect(close).toHaveBeenCalledTimes(1);
+  const next = await createTestApp(options);
+  await next.close();
+  expect(close).toHaveBeenCalledTimes(2);
+});
 
 describe('createTestApp when a step fails', () => {
   it(

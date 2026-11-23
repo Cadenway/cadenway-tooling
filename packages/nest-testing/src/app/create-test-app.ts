@@ -364,6 +364,8 @@ export interface TestApp<
  */
 type Stoppable = () => Promise<void> | void;
 
+let testAppActive = false;
+
 /**
  * Function stopAll
  *
@@ -450,7 +452,7 @@ function applyEnvironment(env: TestEnvironment): () => void {
  * 5. the application, through `create`, then `init`.
  *
  * Nothing starts before the call. When a step fails, what already started is stopped and the
- * error is thrown. Call `close` in `afterAll`.
+ * error is thrown. Run one application per worker and call `close` in `afterAll`.
  *
  * @template TApp Type of the application under test.
  * @param {CreateTestAppOptions<TApp, TClaims, TPrincipal>} options - Service name, dependencies and application factory.
@@ -459,7 +461,13 @@ function applyEnvironment(env: TestEnvironment): () => void {
 export async function createTestApp<TApp extends TestApplication, TClaims, TPrincipal>(
   options: CreateTestAppOptions<TApp, TClaims, TPrincipal>,
 ): Promise<TestApp<TApp, TClaims, TPrincipal>> {
+  if (testAppActive) {
+    throw new Error('Close the current test application before starting another in this worker.');
+  }
+  testAppActive = true;
+
   const stops: Stoppable[] = [];
+  let closing: Promise<void> | undefined;
   /**
    * Function unwind
    *
@@ -468,7 +476,14 @@ export async function createTestApp<TApp extends TestApplication, TClaims, TPrin
    *
    * @returns {Promise<void>} Resolves once everything is stopped.
    */
-  const unwind = (): Promise<void> => stopAll(stops.splice(0).reverse());
+  const unwind = (): Promise<void> => {
+    closing ??= Promise.resolve()
+      .then(() => stopAll(stops.splice(0).reverse()))
+      .finally(() => {
+        testAppActive = false;
+      });
+    return closing;
+  };
   try {
     const tokens: TestInternalTokens<TClaims, TPrincipal> = createTestInternalTokens({
       audience: options.service,
