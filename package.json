@@ -20,7 +20,7 @@
     "release": "pnpm build && changeset publish",
     "changeset": "changeset",
     "test:integration": "vitest run --project integration",
-    "test:integration:service-kit": "tsc -p tsconfig.service-kit.json --noEmit && vitest run --project service-kit"
+    "test:integration:service-kit": "tsc -p packages/nest-testing/tests/service-kit/tsconfig.json --noEmit && vitest run --project service-kit"
   },
   "devDependencies": {
     "@cadenway/angular-testing": "workspace:*",

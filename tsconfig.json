@@ -1,9 +1,4 @@
 {
   "extends": "./tsconfig.base.json",
-  "include": ["packages/*/src/**/*.ts"],
-  "compilerOptions": {
-    "experimentalDecorators": true,
-    "emitDecoratorMetadata": true
-  },
-  "exclude": ["packages/*/src/**/*.kit-spec.ts"]
+  "include": ["packages/*/src/**/*.ts"]
 }

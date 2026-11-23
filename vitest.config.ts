@@ -24,7 +24,7 @@ export default defineConfig({
         extends: true,
         test: {
           name: 'service-kit',
-          include: ['packages/nest-testing/src/**/*.kit-spec.ts'],
+          include: ['packages/nest-testing/tests/service-kit/*.{spec,int-spec}.ts'],
           testTimeout: 60_000,
           hookTimeout: 180_000,
         },

@@ -9,8 +9,11 @@ import {
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
-import { fixtures } from '../fixtures/fixtures.js';
-import { createTestInternalTokens, type TestInternalTokens } from './internal-tokens.js';
+import { fixtures } from '../../src/fixtures/fixtures.js';
+import {
+  createTestInternalTokens,
+  type TestInternalTokens,
+} from '../../src/auth/internal-tokens.js';
 
 const tokenFactories = {
   createSigner: InternalTokenSigner.create,

@@ -48,12 +48,22 @@ import request, { type Response as HttpResult } from 'supertest';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
-import { fixtures } from '../fixtures/fixtures.js';
-import type { FixtureTask } from '../fixtures/sprint-14.js';
-import type { RecordedEvent } from '../nats/event-recorder.js';
-import { assertTenantIsolation, findUnprotectedTables } from '../postgres/tenant-isolation.js';
-import { writeSampleMigrations, type SampleMigrations } from '../testing/sample-migrations.js';
-import { createTestApp, type TestApp, type TestInfrastructure } from './create-test-app.js';
+import { fixtures } from '../../src/fixtures/fixtures.js';
+import type { FixtureTask } from '../../src/fixtures/sprint-14.js';
+import type { RecordedEvent } from '../../src/nats/event-recorder.js';
+import {
+  assertTenantIsolation,
+  findUnprotectedTables,
+} from '../../src/postgres/tenant-isolation.js';
+import {
+  writeSampleMigrations,
+  type SampleMigrations,
+} from '../../src/testing/sample-migrations.js';
+import {
+  createTestApp,
+  type TestApp,
+  type TestInfrastructure,
+} from '../../src/app/create-test-app.js';
 
 /**
  * Constant CONTAINER_START_TIMEOUT_MS

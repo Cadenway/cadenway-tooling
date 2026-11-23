@@ -72,7 +72,7 @@ function assertArchive(archive, manifest, scenario) {
     } else {
       assert.doesNotMatch(
         file,
-        /(?:\/(?:tests?|testing|fixtures?)\/|\.(?:spec|test|int-spec|kit-spec|fixture|mock|harness)\.|\.tsbuildinfo$)/u,
+        /(?:\/(?:tests?|testing|fixtures?)\/|\.(?:spec|test|int-spec|fixture|mock|harness)\.|\.tsbuildinfo$)/u,
       );
     }
     if (file.startsWith('package/dist/')) {
