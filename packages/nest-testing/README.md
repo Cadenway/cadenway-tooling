@@ -61,7 +61,8 @@ migrations, then builds and initializes the application. Assert on the database 
 recorded events, never on logs.
 
 ```ts
-import { createTestApp, fixtures, type TestApp } from '@cadenway/nest-testing';
+import { fixtures } from '@cadenway/nest-testing';
+import { createTestApp, type TestApp } from '@cadenway/nest-testing/infrastructure';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import request from 'supertest';
 

@@ -17,6 +17,10 @@
     "./architecture": {
       "types": "./dist/architecture.d.ts",
       "default": "./dist/architecture.js"
+    },
+    "./infrastructure": {
+      "types": "./dist/infrastructure.d.ts",
+      "default": "./dist/infrastructure.js"
     }
   },
   "files": [

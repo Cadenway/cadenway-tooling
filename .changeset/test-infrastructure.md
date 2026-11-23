@@ -2,7 +2,7 @@
 '@cadenway/nest-testing': minor
 ---
 
-Add the integration test infrastructure to the root entry point.
+Add the `@cadenway/nest-testing/infrastructure` entry point for integration tests.
 
 - `createTestApp({ service, create, migrationsFolder })` starts disposable PostgreSQL, NATS with JetStream and, for a gateway, Redis through Testcontainers, on the image tags cadenway-ops pins (`POSTGRES_IMAGE`, `NATS_IMAGE`, `REDIS_IMAGE`). It applies the Drizzle migrations as the migrator role, sets `DATABASE_URL`, `MIGRATION_DATABASE_URL`, `NATS_URL`, `NATS_USER`, `NATS_PASSWORD`, `REDIS_URL` and the internal token variables, then builds and initializes the application. It returns the application with `database`, `nats`, `events`, `redis`, `tokens`, `http` and `close`. Nothing starts at import time.
 - `startTestDatabase` creates the database and the two roles of a service as cadenway-ops does: `<database>_migrator` owns the database and runs the DDL; `<database>_app` reads and writes the rows of `public` only, creates nothing, does not bypass row-level security and carries the deployed timeouts. Another schema, the `drizzle` journal of the migrations included, is closed to it unless its creator grants access. `asOrganization` and `asSystem` run work as the application role with `app.organization_id` or `app.system_access` set for the transaction.
