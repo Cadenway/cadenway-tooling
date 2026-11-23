@@ -900,6 +900,48 @@ it('rejects additional wiring without a documented consumer or an explicit modul
   );
 });
 
+it('counts only providers registered by the exported additional module', () => {
+  const findings = withProject(
+    {
+      ...STRICT_AUXILIARY_WIRING,
+      [DEMO_AUXILIARY_FILE]: [
+        "import { Module } from '@nestjs/common';",
+        "import { ReadDemo } from '../../public/lifecycle/read-demo.js';",
+        '@Module({ providers: [ReadDemo], exports: [ReadDemo] })',
+        'class PrivateDemoModule {}',
+        '@Module({})',
+        'export class DemoReaderModule {}',
+      ].join('\n'),
+    },
+    'service',
+    [],
+    'strict',
+  );
+  expect(findings).toContainEqual(
+    expect.objectContaining({
+      rule: 'strict-public-nest-export',
+      message: 'Include "ReadDemo" in the @Module exports for demo.',
+    }),
+  );
+});
+
+it('accepts an explicit local named export but rejects a type-only module export', () => {
+  const source = (STRICT_AUXILIARY_WIRING[DEMO_AUXILIARY_FILE] ?? '').replace(
+    'export class',
+    'class',
+  );
+  const files = (specifier: string): Readonly<Record<string, string>> => ({
+    ...STRICT_AUXILIARY_WIRING,
+    [DEMO_AUXILIARY_FILE]: `${source}\n${specifier}`,
+  });
+  expect(withProject(files('export { DemoReaderModule };'), 'service', [], 'strict')).toEqual([]);
+  expect(
+    withProject(files('export type { DemoReaderModule };'), 'service', [], 'strict'),
+  ).toContainEqual(
+    expect.objectContaining({ file: DEMO_AUXILIARY_FILE, rule: 'strict-auxiliary-wiring' }),
+  );
+});
+
 it('still rejects eagerly cyclic wiring and implicit global providers in an additional module', () => {
   const findings = withProject(
     {
