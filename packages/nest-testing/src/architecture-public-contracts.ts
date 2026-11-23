@@ -30,8 +30,14 @@ interface NamedExport {
 }
 
 const PUBLIC_ENTRY = /^public\/([a-z0-9]+(?:-[a-z0-9]+)*)\/([a-z0-9]+(?:-[a-z0-9]+)*)$/u;
+const AUXILIARY_WIRING = /^composition\/modules\/[a-z0-9]+(?:-[a-z0-9]+)*\.module$/u;
 const PUBLIC_HEADER = /^\s*\|\s*Entry point\s*\|\s*Consumers\s*\|\s*$/u;
 const TABLE_SEPARATOR = /^\s*\|\s*:?-+:?\s*\|\s*:?-+:?\s*\|\s*$/u;
+
+/** Identifies the module-relative entry of an additional Nest wiring file. */
+export function isAuxiliaryWiringEntry(entry: string): boolean {
+  return AUXILIARY_WIRING.test(entry);
+}
 
 function repositoryPath(rootDir: string, path: string): string {
   return relative(rootDir, path).replaceAll('\\', '/');
@@ -275,15 +281,19 @@ function inspectPublicTypes(
   for (const signature of signatures) inspectSignature(signature, location);
 }
 
-function importedModuleDecorator(checker: ts.TypeChecker, expression: ts.Expression): boolean {
+function importedNestDecorator(
+  checker: ts.TypeChecker,
+  expression: ts.Expression,
+  name: string,
+): boolean {
   const namespace = ts.isPropertyAccessExpression(expression) ? expression.expression : undefined;
-  if (ts.isPropertyAccessExpression(expression) && expression.name.text !== 'Module') return false;
+  if (ts.isPropertyAccessExpression(expression) && expression.name.text !== name) return false;
   const declaration = checker.getSymbolAtLocation(namespace ?? expression)?.declarations?.[0];
   if (!declaration || (!ts.isImportSpecifier(declaration) && !ts.isNamespaceImport(declaration)))
     return false;
   if (
     ts.isImportSpecifier(declaration) &&
-    (declaration.propertyName ?? declaration.name).text !== 'Module'
+    (declaration.propertyName ?? declaration.name).text !== name
   )
     return false;
   let parent: ts.Node = declaration;
@@ -345,6 +355,7 @@ function propertyValue(
 function nestExports(
   source: ts.SourceFile | undefined,
   checker: ts.TypeChecker,
+  onlyClass?: ts.ClassDeclaration,
 ): readonly { readonly symbol?: ts.Symbol; readonly node: ts.Node }[] {
   const exports: { symbol?: ts.Symbol; node: ts.Node }[] = [];
   const visitedArrays = new Set<ts.ArrayLiteralExpression>();
@@ -369,12 +380,12 @@ function nestExports(
   };
 
   for (const statement of source?.statements ?? []) {
-    if (!ts.isClassDeclaration(statement)) continue;
+    if (!ts.isClassDeclaration(statement) || (onlyClass && statement !== onlyClass)) continue;
     for (const decorator of ts.getDecorators(statement) ?? []) {
       const call = decorator.expression;
       if (
         !ts.isCallExpression(call) ||
-        !importedModuleDecorator(checker, call.expression) ||
+        !importedNestDecorator(checker, call.expression, 'Module') ||
         !call.arguments[0]
       )
         continue;
@@ -413,14 +424,14 @@ function checkManifest(
     if (entry === 'None' && consumers.length === 1 && consumers[0] === 'None' && rows.length === 1)
       continue;
     if (
-      (!PUBLIC_ENTRY.test(entry) && entry !== wiring) ||
+      (!PUBLIC_ENTRY.test(entry) && entry !== wiring && !isAuxiliaryWiringEntry(entry)) ||
       !sources.has(`${owner.root}/${entry}.ts`) ||
       known.has(entry)
     ) {
       options.report(
         file,
         'strict-public-entry',
-        `Declare each existing public/<area>/<operation> or ${wiring} once; found "${entry}".`,
+        `Declare each existing public/<area>/<operation>, ${wiring}, or composition/modules/<name>.module once; found "${entry}".`,
         line,
       );
       continue;
@@ -450,6 +461,56 @@ function checkManifest(
       );
     }
   }
+}
+
+function checkAuxiliaryWiring(
+  options: PublicContractOptions,
+  source: ts.SourceFile,
+  checker: ts.TypeChecker,
+): ts.ClassDeclaration | undefined {
+  const file = repositoryPath(options.rootDir, source.fileName);
+  const symbol = checker.getSymbolAtLocation(source);
+  const exports = symbol && checker.getExportsOfModule(symbol);
+  const [entry] = exports ?? [];
+  const declaration = targetSymbol(checker, entry)?.valueDeclaration;
+  if (
+    exports?.length !== 1 ||
+    entry?.name === 'default' ||
+    entry?.declarations?.some(
+      (node) => ts.isExportSpecifier(node) && (node.isTypeOnly || node.parent.parent.isTypeOnly),
+    ) ||
+    !declaration ||
+    !ts.isClassDeclaration(declaration) ||
+    declaration.getSourceFile() !== source
+  ) {
+    options.report(
+      file,
+      'strict-auxiliary-wiring',
+      'Export one local named @Module class from additional wiring.',
+    );
+    return undefined;
+  }
+  const names = (ts.getDecorators(declaration) ?? [])
+    .map((decorator) => decorator.expression)
+    .filter(ts.isCallExpression)
+    .map((call) => call.expression);
+  if (!names.some((expression) => importedNestDecorator(checker, expression, 'Module'))) {
+    options.report(
+      file,
+      'strict-auxiliary-wiring',
+      'Export one local named @Module class from additional wiring.',
+    );
+    return undefined;
+  }
+  if (names.some((expression) => importedNestDecorator(checker, expression, 'Global'))) {
+    options.report(
+      file,
+      'strict-auxiliary-wiring',
+      'Import additional wiring explicitly instead of marking it @Global.',
+    );
+    return undefined;
+  }
+  return declaration;
 }
 
 function checkEntry(
@@ -543,24 +604,39 @@ export function verifyStrictPublicContracts(options: PublicContractOptions): voi
   const checker = options.program.getTypeChecker();
   const owners = new Set(options.modules.map((owner) => owner.name));
   const entriesByOwner = new Map<string, ts.SourceFile[]>();
+  const wiringByOwner = new Map<string, ts.SourceFile[]>();
   for (const [path, source] of sources) {
     if (!path.endsWith('.ts') || /\.(?:spec|int-spec|fixture)\.ts$/u.test(path)) continue;
-    const owner = options.modules.find((candidate) => path.startsWith(`${candidate.root}/public/`));
+    const owner = options.modules.find((candidate) => path.startsWith(`${candidate.root}/`));
     if (!owner) continue;
-    const entries = entriesByOwner.get(owner.root) ?? [];
+    const entry = path.slice(owner.root.length + 1, -3);
+    const byOwner = entry.startsWith('public/')
+      ? entriesByOwner
+      : isAuxiliaryWiringEntry(entry)
+        ? wiringByOwner
+        : undefined;
+    if (!byOwner) continue;
+    const entries = byOwner.get(owner.root) ?? [];
     entries.push(source);
-    entriesByOwner.set(owner.root, entries);
+    byOwner.set(owner.root, entries);
   }
 
   for (const owner of options.modules) {
     const entries = entriesByOwner.get(owner.root) ?? [];
-    checkManifest(options, owner, sources, entries, owners);
+    const auxiliary = wiringByOwner.get(owner.root) ?? [];
+    checkManifest(options, owner, sources, [...entries, ...auxiliary], owners);
     const runtime = new Map<ts.Symbol, NamedExport>();
     for (const entry of entries) {
       const approved = checkEntry(options, owner, checker, entry);
       if (approved) runtime.set(approved.symbol, approved);
     }
-    const registered = nestExports(sources.get(owner.wiring), checker);
+    const registered = [
+      ...nestExports(sources.get(owner.wiring), checker),
+      ...auxiliary.flatMap((source) => {
+        const exportedClass = checkAuxiliaryWiring(options, source, checker);
+        return exportedClass ? nestExports(source, checker, exportedClass) : [];
+      }),
+    ];
     for (const [symbol, entry] of runtime) {
       if (!registered.some((item) => item.symbol === symbol)) {
         options.report(

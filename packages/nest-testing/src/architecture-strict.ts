@@ -5,7 +5,10 @@ import ts from 'typescript';
 
 import { checkFileDeclarations, checkUtilityPath } from './architecture-file-conventions.js';
 import { isPrivateKitImport } from './architecture-kit-entries.js';
-import { findStrictPublicConsumers } from './architecture-public-contracts.js';
+import {
+  findStrictPublicConsumers,
+  isAuxiliaryWiringEntry,
+} from './architecture-public-contracts.js';
 
 export type StrictProfile = 'service' | 'gateway';
 
@@ -138,7 +141,7 @@ export function strictOwnerOf(file: string): StrictOwner | undefined {
   const tail = file.slice(root.length + 1);
   const first = tail.split('/')[0] ?? '';
   const layer =
-    file === wiring
+    file === wiring || (tail.endsWith('.ts') && isAuxiliaryWiringEntry(tail.slice(0, -3)))
       ? 'wiring'
       : tail.includes('/') && LAYERS.has(first)
         ? (first as Layer)
@@ -455,7 +458,7 @@ export function checkStrictImport(options: StrictImportOptions): void {
   if (!owner) {
     if (!(
       source === 'src/app.module.ts' &&
-      targetOwner.layer === 'wiring' &&
+      target === targetOwner.wiring &&
       edge.namedImport &&
       !edge.typeOnly
     )) {
