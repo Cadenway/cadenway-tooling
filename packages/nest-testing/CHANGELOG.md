@@ -1,5 +1,11 @@
 # @cadenway/nest-testing
 
+## 0.7.1
+
+### Patch Changes
+
+- 9f5d231: Accept @cadenway/nest-messaging 0.9 as a peer.
+
 ## 0.7.0
 
 ### Minor Changes
